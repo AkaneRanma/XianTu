@@ -335,8 +335,8 @@
                   </div>
                 </div>
 
-                <!-- Tab: 私密信息（仅酒馆环境） -->
-                <div v-if="isTavernEnvFlag" v-show="activeTab === 'nsfw'" class="tab-panel">
+                <!-- Tab: 私密信息（已解除环境限制，所有环境均可使用） -->
+                <div v-show="activeTab === 'nsfw'" class="tab-panel">
                   <div class="detail-section nsfw-section">
                     <h5 class="section-title">🔞 私密信息</h5>
 
@@ -943,9 +943,8 @@ const tabs = computed(() => {
     { id: 'status', label: '实时状态', icon: '💭' },
   ];
 
-  if (isTavernEnvFlag) {
-    baseTabs.push({ id: 'nsfw', label: '私密信息', icon: '🔞' });
-  }
+  // 🔥 已解除环境限制：私密信息Tab在所有环境下可用
+  baseTabs.push({ id: 'nsfw', label: '私密信息', icon: '🔞' });
 
   // 添加记忆档案tab
   baseTabs.push({ id: 'memory', label: '记忆档案', icon: '📝' });

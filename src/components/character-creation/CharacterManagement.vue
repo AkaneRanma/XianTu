@@ -1000,7 +1000,8 @@ const exportCharacter = async (charId: string) => {
     const savesWithFullData = await Promise.all(
       saveSlots.map(async (save) => {
         const fullData = await loadSaveData(charId, save.存档名);
-        const patchedData = isTavernEnv() ? (ensureSaveDataHasTavernNsfw(fullData) as any) : fullData;
+        // 🔥 已解除环境限制：所有环境都确保NSFW数据存在
+        const patchedData = ensureSaveDataHasTavernNsfw(fullData) as any;
         return {
           ...save,
           存档数据: patchedData  // 统一字段名
@@ -1054,7 +1055,8 @@ const exportSingleSave = async (charId: string, slotKey: string, slot: SaveSlot)
     // 从 IndexedDB 加载完整的存档数据
     const { loadSaveData } = await import('@/utils/indexedDBManager');
     const fullSaveDataRaw = await loadSaveData(charId, slotKey);
-    const fullSaveData = isTavernEnv() ? (ensureSaveDataHasTavernNsfw(fullSaveDataRaw) as any) : fullSaveDataRaw;
+    // 🔥 已解除环境限制：所有环境都确保NSFW数据存在
+    const fullSaveData = ensureSaveDataHasTavernNsfw(fullSaveDataRaw) as any;
 
     if (!fullSaveData) {
       toast.error('无法加载存档数据');
@@ -1125,7 +1127,8 @@ const exportSaves = async () => {
     const savesWithFullData = await Promise.all(
       saveSlots.map(async (save) => {
         const fullData = await loadSaveData(charId, save.存档名);
-        const patchedData = isTavernEnv() ? (ensureSaveDataHasTavernNsfw(fullData) as any) : fullData;
+        // 🔥 已解除环境限制：所有环境都确保NSFW数据存在
+        const patchedData = ensureSaveDataHasTavernNsfw(fullData) as any;
         return {
           ...save,
           存档数据: patchedData  // 使用统一的字段名

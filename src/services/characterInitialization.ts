@@ -263,10 +263,8 @@ function prepareInitialData(baseInfo: CharacterBaseInfo, age: number): { saveDat
         '⚠️ 先创建后修改：修改数据前必须确保数据已存在',
         '装备栏字段：装备1-6'
       ],
-      ...(tavernEnv ? {
-        // 🔥 NSFW设置：从localStorage读取用户设置
-        ...getNsfwSettingsFromStorage()
-      } : {})
+      // 🔥 NSFW设置：从localStorage读取用户设置（已解除环境限制，所有环境均可使用）
+      ...getNsfwSettingsFromStorage()
     }
   };
 
@@ -276,7 +274,8 @@ function prepareInitialData(baseInfo: CharacterBaseInfo, age: number): { saveDat
 
   // 🔥 初始化玩家身体部位（NSFW模式）
   // 注意：这里只是初始化占位符，AI会在角色初始化响应中生成详细描述
-  if (tavernEnv && saveData.系统?.nsfwMode) {
+  // 已解除环境限制，所有环境均可使用NSFW功能
+  if (saveData.系统?.nsfwMode) {
     console.log('[角色初始化] NSFW模式已开启，将由AI生成身体部位详细描述');
     // 创建空对象，等待AI填充
     saveData.身体部位开发 = {};
@@ -407,7 +406,8 @@ async function generateOpeningScene(saveData: SaveData, baseInfo: CharacterBaseI
       coordinates: location.coordinates
     })) || [],
     mapConfig: saveData.世界信息?.地图配置,
-    systemSettings: tavernEnv ? (ensureSystemConfigHasNsfw(saveData.系统) as any) : (saveData.系统 || {})
+    // 已解除环境限制，所有环境均确保NSFW配置存在
+    systemSettings: ensureSystemConfigHasNsfw(saveData.系统) as any
   };
 
   console.log('[初始化] 🔥 世界信息检查:');
@@ -436,8 +436,8 @@ ${selectionsSummary}
   const onStreamChunk = (chunk: string) => {
     fullStreamingText += chunk;
     // 只显示最后300个字符，避免遮挡loading界面
-    const displayWindow = fullStreamingText.length > 300 
-      ? '...' + fullStreamingText.slice(-300) 
+    const displayWindow = fullStreamingText.length > 300
+      ? '...' + fullStreamingText.slice(-300)
       : fullStreamingText;
     // 使用 pre-wrap 样式保持换行
     uiStore.updateLoadingText(`天道正在为你书写命运之章...<br/><br/><div style="text-align: left; font-size: 0.9em; opacity: 0.8; white-space: pre-wrap;">${displayWindow}</div>`);
@@ -450,8 +450,8 @@ async () => {
   try {
     // 🔥 [新架构] 使用 AIBidirectionalSystem 生成初始消息
     const aiSystem = AIBidirectionalSystem;
-    const response = await aiSystem.generateInitialMessage(systemPrompt, userPrompt, { 
-      useStreaming, 
+    const response = await aiSystem.generateInitialMessage(systemPrompt, userPrompt, {
+      useStreaming,
       generateMode,
       onStreamChunk: onStreamChunk
     });

@@ -233,36 +233,35 @@
             </div>
           </div>
 
-          <template v-if="isTavernEnvFlag">
-            <div class="setting-item">
-              <div class="setting-info">
-                <label class="setting-name">{{ t('🔞 启用成人内容（私密信息）') }}</label>
-                <span class="setting-desc">{{
-                  t('生成和显示NPC的私密信息模块（包含成人向内容，默认开启）')
-                }}</span>
-              </div>
-              <div class="setting-control">
-                <label class="setting-switch">
-                  <input type="checkbox" v-model="settings.enableNsfwMode" />
-                  <span class="switch-slider"></span>
-                </label>
-              </div>
+          <!-- 🔥 已解除环境限制：NSFW设置在所有环境下可用 -->
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-name">{{ t('🔞 启用成人内容（私密信息）') }}</label>
+              <span class="setting-desc">{{
+                t('生成和显示NPC的私密信息模块（包含成人向内容，默认开启）')
+              }}</span>
             </div>
+            <div class="setting-control">
+              <label class="setting-switch">
+                <input type="checkbox" v-model="settings.enableNsfwMode" />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+          </div>
 
-            <div class="setting-item" v-if="settings.enableNsfwMode">
-              <div class="setting-info">
-                <label class="setting-name">{{ t('👥 私密信息生成范围') }}</label>
-                <span class="setting-desc">{{ t('选择为哪些性别的NPC生成私密信息') }}</span>
-              </div>
-              <div class="setting-control">
-                <select v-model="settings.nsfwGenderFilter" class="setting-select">
-                  <option value="female">{{ t('仅女性') }}</option>
-                  <option value="male">{{ t('仅男性') }}</option>
-                  <option value="all">{{ t('所有性别') }}</option>
-                </select>
-              </div>
+          <div class="setting-item" v-if="settings.enableNsfwMode">
+            <div class="setting-info">
+              <label class="setting-name">{{ t('👥 私密信息生成范围') }}</label>
+              <span class="setting-desc">{{ t('选择为哪些性别的NPC生成私密信息') }}</span>
             </div>
-          </template>
+            <div class="setting-control">
+              <select v-model="settings.nsfwGenderFilter" class="setting-select">
+                <option value="female">{{ t('仅女性') }}</option>
+                <option value="male">{{ t('仅男性') }}</option>
+                <option value="all">{{ t('所有性别') }}</option>
+              </select>
+            </div>
+          </div>
 
           <template v-if="!isTavernEnvFlag">
             <div class="setting-item">
