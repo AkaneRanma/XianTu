@@ -93,10 +93,11 @@ class AIBidirectionalSystemClass {
     character: CharacterProfile,
     options?: ProcessOptions & { generation_id?: string }
   ): Promise<GM_Response | null> {
-    console.log('[AI双向系统] processPlayerAction 接收到的options:', {
+    console.warn('[AI双向系统] ⚡ processPlayerAction 接收到的options:', {
       hasOnStreamChunk: !!options?.onStreamChunk,
       useStreaming: options?.useStreaming,
-      splitResponseGeneration: options?.splitResponseGeneration
+      splitResponseGeneration: options?.splitResponseGeneration,
+      onStreamChunkType: options?.onStreamChunk ? typeof options.onStreamChunk : 'undefined'
     });
     const gameStateStore = useGameStateStore();
     const tavernHelper = getTavernHelper();
@@ -272,6 +273,69 @@ ${stateJsonString}
           const stepRules = (await getPrompt(step === 1 ? 'splitGenerationStep1' : 'splitGenerationStep2')).trim();
 
           const tavernEnv = !!tavernHelper;
+
+          // 🔥 修复：第一步只需要精简的提示词，避免 coreOutputRules 和 dataDefinitions 污染
+          // 这些提示词包含完整的 JSON 格式示例（含 mid_term_memory/tavern_commands），
+          // 会与 splitGenerationStep1 的"禁止输出这些字段"规则冲突
+          if (step === 1) {
+            // 🔥 第一步：极简提示词，只关注"如何写好正文"
+            // 不包含任何提到 tavern_commands/mid_term_memory 的内容
+            const [textFormatsPrompt, worldStandardsPrompt] = await Promise.all([
+              getPrompt('textFormatRules'),
+              getPrompt('worldStandards')
+            ]);
+
+            // 🔥 强化输出格式约束（放在最前面，最高优先级）
+            const step1OutputEnforcement = `
+# ⚠️ 【最高优先级】输出格式强制约束 ⚠️
+
+## 本步骤（第1步）只允许输出以下格式：
+
+\`\`\`
+<thinking>
+[你的思考过程]
+</thinking>
+
+\`\`\`json
+{
+  "text": "你的正文内容"
+}
+\`\`\`
+\`\`\`
+
+## 绝对禁止：
+- ❌ 禁止输出 "mid_term_memory" 字段
+- ❌ 禁止输出 "tavern_commands" 字段
+- ❌ 禁止输出 "action_options" 字段
+- ❌ 禁止输出任何除 "text" 以外的字段
+
+## 只允许：
+- ✅ 只输出 { "text": "..." } 这一个字段
+- ✅ text 内容只写小说正文，不要夹带任何 JSON 片段
+
+如果你输出了 text 以外的任何字段，将被视为严重错误！
+`.trim();
+
+            const sections: string[] = [
+              step1OutputEnforcement, // 🔥 输出约束放在最前面
+              stepRules,              // 分步规则：只输出 text
+              textFormatsPrompt,      // 文本格式：标记、判定、战斗
+              worldStandardsPrompt    // 世界标准：境界属性、品质
+              // 🔥 移除 businessRulesPrompt，因为它包含大量 tavern_commands 使用说明
+            ];
+
+            const assembled = sections.join('\n\n---\n\n');
+            return `
+${assembled}
+
+${coreStatusSummary}
+
+# 游戏状态（JSON）
+${stateJsonString}
+`.trim();
+          }
+
+          // 第二步：包含完整的提示词（需要输出 mid_term_memory/tavern_commands/action_options）
           const [coreOutputRulesPrompt, businessRulesPrompt, dataDefinitionsPrompt, textFormatsPrompt, worldStandardsPrompt] = await Promise.all([
             getPrompt('coreOutputRules'),
             getPrompt('businessRules'),
@@ -290,16 +354,12 @@ ${stateJsonString}
             worldStandardsPrompt
           ];
 
-          if (step === 2 && uiStore.enableActionOptions) {
+          if (uiStore.enableActionOptions) {
             const actionOptionsPrompt = await getPrompt('actionOptions');
             const customPromptSection = uiStore.actionOptionsPrompt
               ? `**用户自定义要求**：${uiStore.actionOptionsPrompt}\n\n请严格按以上要求生成行动选项。`
               : '（无特殊要求，按默认规则生成）';
             sections.push(actionOptionsPrompt.replace('{{CUSTOM_ACTION_PROMPT}}', customPromptSection));
-          }
-
-          if (step === 1 && (stateForAI as any).任务系统?.配置?.启用系统任务) {
-            sections.push(await getPrompt('questGeneration'));
           }
 
           const assembled = sections.join('\n\n---\n\n');
@@ -337,8 +397,25 @@ ${stateJsonString}
           onStreamChunk?: (chunk: string) => void;
           useStep2Config?: boolean; // 是否使用Step2独立API配置
         }) => {
-          if (tavernHelper) {
-            // 酒馆模式下，如果启用了Step2独立配置且当前是第2步
+          // 🔥 修复：检查 aiService 的实际模式，而不只是 tavernHelper 是否存在
+          // 用户可能在酒馆环境中但使用自定义API模式
+          const actualMode = aiService.getConfig().mode;
+          const useTavernAPI = tavernHelper && actualMode === 'tavern';
+
+          // 🔥 诊断日志：generateOnce 调用参数（使用warn级别确保可见）
+          console.warn('[AI双向系统] ⚡ generateOnce 调用', {
+            generation_id: args.generation_id,
+            should_stream: args.should_stream,
+            hasOnStreamChunk: !!args.onStreamChunk,
+            onStreamChunkType: args.onStreamChunk ? typeof args.onStreamChunk : 'undefined',
+            useStep2Config: args.useStep2Config,
+            tavernHelperExists: !!tavernHelper,
+            aiServiceMode: actualMode,
+            useTavernAPI: useTavernAPI
+          });
+
+          if (useTavernAPI) {
+            // 只有当 tavernHelper 存在且 aiService 模式是 tavern 时才使用酒馆API
             if (args.useStep2Config && aiService.hasStep2IndependentConfig()) {
               // 酒馆环境下使用自定义API的Step2配置
               console.log('[AI双向系统] 酒馆模式下Step2使用独立API配置');
@@ -357,7 +434,7 @@ ${stateJsonString}
               injects: args.injects,
             });
           }
-          // 自定义API模式
+          // 自定义API模式（包括：tavernHelper不存在，或者aiService模式是custom）
           if (args.useStep2Config) {
             return await aiService.generateWithStep2Config({
               user_input: args.user_input,
@@ -379,6 +456,16 @@ ${stateJsonString}
         options?.onProgressUpdate?.('分步生成：第1步（正文）…');
         const systemPromptStep1 = await buildSplitSystemPrompt(1);
         const injectsStep1 = buildSplitInjects(systemPromptStep1);
+
+        // 🔥 诊断日志：第一步流式配置（使用warn级别确保可见）
+        console.warn('[AI双向系统] ⚡ 分步生成：第1步开始', {
+          useStreaming,
+          hasOnStreamChunk: !!options?.onStreamChunk,
+          onStreamChunkType: options?.onStreamChunk ? typeof options.onStreamChunk : 'undefined',
+          isTavernMode: !!tavernHelper,
+          generationId: `${generationId}_step1`
+        });
+
         const step1Raw = await generateOnce({
           user_input: finalUserInput,
           should_stream: useStreaming,
@@ -386,6 +473,8 @@ ${stateJsonString}
           injects: injectsStep1 as any,
           onStreamChunk: options?.onStreamChunk,
         });
+
+        console.warn('[AI双向系统] ✅ 分步生成：第1步完成，响应长度:', String(step1Raw).length);
 
         const step1Thinking = (() => {
           const match = String(step1Raw).match(/<thinking>([\s\S]*?)<\/thinking>/i);
@@ -399,6 +488,10 @@ ${stateJsonString}
             return String(step1Raw).replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
           }
         })();
+
+        // 🔥 关键修复：第1步完成后，立即通知前端切换UI显示模式
+        // 这样用户可以在第2步运行时就开始阅读正文
+        uiStore.completeSplitStep1(step1Text);
 
         options?.onProgressUpdate?.('分步生成：第2步（记忆/指令/行动选项）…');
         const systemPromptStep2 = await buildSplitSystemPrompt(2);
@@ -416,18 +509,22 @@ ${step1Text}
 请按“分步生成（第2步）”规则输出 JSON。
 `.trim();
 
-        if (useStreaming && options?.onStreamChunk) {
-          options.onStreamChunk('\n\n---\n\n**正在生成指令与记忆...**\n\n');
-        }
+        // 🔥 第二步不使用流式传输，直接等待完整响应
+        console.warn('[AI双向系统] ⚡ 分步生成：第2步开始（禁用流式）');
 
         response = await generateOnce({
           user_input: step2UserInput,
-          should_stream: useStreaming,
+          should_stream: false, // 🔥 第二步禁用流式传输
           generation_id: `${generationId}_step2`,
           injects: injectsStep2 as any,
-          onStreamChunk: options?.onStreamChunk,
+          // 不传递 onStreamChunk，第二步不需要实时显示
           useStep2Config: true, // 第2步使用独立API配置
         });
+
+        console.warn('[AI双向系统] ✅ 分步生成：第2步完成');
+
+        // 🔥 通知前端第2步完成
+        uiStore.completeSplitStep2();
 
         let parsedStep2: GM_Response;
         try {
@@ -719,17 +816,18 @@ ${step1Text}
 请按“分步生成（开局-第2步）”规则输出 JSON。
         `.trim();
 
-        if (useStreaming && options?.onStreamChunk) {
-          options.onStreamChunk('\n\n---\n\n**正在生成指令与记忆...**\n\n');
-        }
+        // 🔥 开局第二步不使用流式传输
+        console.log('[AI双向系统] 开局分步生成：第2步开始（禁用流式）');
 
         const step2Raw = await generateOnce({
           step: 2,
           system: await buildInitialSplitSystemPrompt(2),
           user: step2UserPrompt,
-          should_stream: useStreaming,
-          onStreamChunk: options?.onStreamChunk,
+          should_stream: false, // 🔥 第二步禁用流式传输
+          // 不传递 onStreamChunk，第二步不需要实时显示
         });
+
+        console.log('[AI双向系统] 开局分步生成：第2步完成');
 
         let parsedStep2: GM_Response;
         try {

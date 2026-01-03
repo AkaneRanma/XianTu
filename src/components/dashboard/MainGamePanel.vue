@@ -27,8 +27,8 @@
     <div class="content-area" ref="contentAreaRef">
       <!-- 左侧：当前叙述 -->
       <div class="current-narrative">
-        <!-- AI生成状态指示器（生成时显示在顶部） -->
-        <div v-if="isAIProcessing" class="ai-processing-indicator">
+        <!-- AI生成状态指示器（生成时显示在顶部，但分步第1步完成后隐藏） -->
+        <div v-if="isAIProcessing && !splitStep1Completed" class="ai-processing-indicator">
           <div class="streaming-meta">
             <span class="narrative-time">{{ formatCurrentTime() }}</span>
             <div class="streaming-indicator">
@@ -46,10 +46,35 @@
           </div>
         </div>
 
-        <!-- 流式输出内容（生成时实时显示，优先级最高） -->
-        <div v-if="isAIProcessing && streamingContent" class="streaming-narrative-content">
+        <!-- 流式输出内容（第1步流式传输进行中，且第1步未完成） -->
+        <div v-if="isAIProcessing && streamingContent && !splitStep1Completed" class="streaming-narrative-content">
           <div class="streaming-text">
             <FormattedText :text="streamingContent" />
+          </div>
+        </div>
+
+        <!-- 🔥 分步生成第1步完成后：显示完整正文（第2步在后台运行） -->
+        <div v-else-if="isAIProcessing && splitStep1Completed && splitStep1Text" class="narrative-content split-step1-completed">
+          <div class="narrative-meta">
+            <span class="narrative-time">{{ formatCurrentTime() }}</span>
+            <div class="meta-buttons">
+              <!-- 第2步进行中指示器 -->
+              <div v-if="splitStep2InProgress" class="step2-indicator" :title="t('正在处理数据...')">
+                <span class="streaming-dot"></span>
+                <span class="step2-text">{{ t('数据处理中') }}</span>
+              </div>
+              <!-- 重置按钮 -->
+              <button
+                @click="forceResetAIProcessingState"
+                class="reset-state-btn"
+                :title="t('如果长时间无响应，点击此处重置状态')"
+              >
+                <RotateCcw :size="16" />
+              </button>
+            </div>
+          </div>
+          <div class="narrative-text">
+            <FormattedText :text="splitStep1Text" />
           </div>
         </div>
 
@@ -356,6 +381,11 @@ const isAIProcessing = computed(() => uiStore.isAIProcessing);
 const streamingContent = computed(() => uiStore.streamingContent);
 const currentGenerationId = computed(() => uiStore.currentGenerationId);
 const streamingCharCount = computed(() => uiStore.streamingContent.length);
+
+// 🔥 分步生成状态（用于在第1步完成后立即切换UI显示模式）
+const splitStep1Completed = computed(() => uiStore.splitStep1Completed);
+const splitStep1Text = computed(() => uiStore.splitStep1Text);
+const splitStep2InProgress = computed(() => uiStore.splitStep2InProgress);
 
 const inputRef = ref<HTMLTextAreaElement>();
 const contentAreaRef = ref<HTMLDivElement>();
@@ -958,16 +988,14 @@ const retryAIResponse = async (
         generation_id: retryGenerationId  // 🔥 传递 generation_id
       };
 
-      // 非酒馆环境（网页版自定义API）：需要设置 onStreamChunk 才能实时渲染
-      if (!isTavernEnvFlag) {
-        console.log('[网页版流式-重试] 设置 onStreamChunk 回调');
-        (options as any).onStreamChunk = (chunk: string) => {
-          if (!useStreaming.value || !chunk) return;
-          console.log('[网页版流式-重试] 收到chunk:', chunk.length, '字符');
-          rawStreamingContent.value += chunk;
-          uiStore.setStreamingContent(rawStreamingContent.value);
-        };
-      }
+      // 🔥 修复：始终设置 onStreamChunk 回调（与 sendMessage 一致）
+      console.warn('[流式设置-重试] ⚡ 设置 onStreamChunk 回调, useStreaming=', useStreaming.value);
+      (options as any).onStreamChunk = (chunk: string) => {
+        if (!useStreaming.value || !chunk) return;
+        console.warn('[流式回调-重试] ✅ 收到chunk:', chunk.length, '字符');
+        rawStreamingContent.value += chunk;
+        uiStore.setStreamingContent(rawStreamingContent.value);
+      };
 
       const aiResponse = await bidirectionalSystem.processPlayerAction(
         enhancedMessage,
@@ -1147,16 +1175,23 @@ const sendMessage = async () => {
         useStreaming: useStreaming.value
       };
 
-      // 酒馆环境：流式通过事件系统处理（STREAM_TOKEN_RECEIVED_INCREMENTALLY）
-      // 非酒馆环境（网页版自定义API）：需要设置 onStreamChunk 才能实时渲染
-      if (!isTavernEnvFlag) {
-        console.log('[网页版流式] 设置 onStreamChunk 回调');
-        (options as any).onStreamChunk = (chunk: string) => {
-          if (!useStreaming.value || !chunk) return;
-          console.log('[网页版流式] 收到chunk:', chunk.length, '字符');
-          rawStreamingContent.value += chunk;
-          uiStore.setStreamingContent(rawStreamingContent.value);
-        };
+      // 🔥 修复：始终设置 onStreamChunk 回调
+      // 酒馆环境中如果使用自定义API也需要此回调
+      // 如果使用酒馆API，回调不会被调用（酒馆使用事件系统）
+      console.warn('[流式设置] ⚡ 设置 onStreamChunk 回调, useStreaming=', useStreaming.value, ', isTavernEnv=', isTavernEnvFlag);
+      (options as any).onStreamChunk = (chunk: string) => {
+        console.warn('[流式回调] 📦 onStreamChunk被调用, chunk长度:', chunk?.length || 0, ', useStreaming=', useStreaming.value);
+        if (!useStreaming.value || !chunk) {
+          console.warn('[流式回调] ⏭️ 跳过chunk: useStreaming=', useStreaming.value, ', chunk为空=', !chunk);
+          return;
+        }
+        console.warn('[流式回调] ✅ 处理chunk:', chunk.length, '字符, 累计长度:', rawStreamingContent.value.length + chunk.length);
+        rawStreamingContent.value += chunk;
+        uiStore.setStreamingContent(rawStreamingContent.value);
+      };
+      // 酒馆环境下如果使用酒馆API，流式传输通过事件系统处理
+      if (isTavernEnvFlag) {
+        console.warn('[酒馆模式] 🍺 酒馆API的流式传输通过事件系统处理（onStreamChunk作为自定义API的备用）');
       }
 
       // 生成唯一的 generation_id
@@ -2193,6 +2228,44 @@ const syncGameState = async () => {
 
 .streaming-text {
   font-weight: 500;
+}
+
+/* 🔥 分步生成第2步进行中指示器 */
+.step2-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--color-success, #22c55e);
+  background: rgba(34, 197, 94, 0.1);
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.step2-indicator .streaming-dot {
+  background: var(--color-success, #22c55e);
+}
+
+.step2-text {
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+/* 分步生成第1步完成后的叙述内容 */
+.split-step1-completed {
+  position: relative;
+}
+
+.split-step1-completed::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-success, #22c55e), transparent);
+  border-radius: 2px 2px 0 0;
 }
 
 /* 等待动画样式 */

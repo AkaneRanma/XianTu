@@ -423,7 +423,8 @@ class AIService {
   ): Promise<string> {
     const { provider, url, apiKey, model, temperature, maxTokens } = this.config.customAPI!;
 
-    console.log(`[AI服务-API调用] Provider: ${provider}, URL: ${url}, Model: ${model}, 消息数: ${messages.length}, 流式: ${streaming}`);
+    // 🔥 诊断日志（使用warn级别确保可见）
+    console.warn(`[AI服务-API调用] ⚡ Provider: ${provider}, Model: ${model}, 流式: ${streaming}, hasOnStreamChunk: ${!!onStreamChunk}`);
 
     // 根据provider选择不同的调用方式
     switch (provider) {
@@ -798,7 +799,8 @@ class AIService {
     maxTokens: number,
     onStreamChunk?: (chunk: string) => void
   ): Promise<string> {
-    console.log('[AI服务-OpenAI流式] 开始');
+    // 🔥 诊断日志（使用warn级别确保可见）
+    console.warn('[AI服务-OpenAI流式] ⚡ 开始流式请求, hasOnStreamChunk:', !!onStreamChunk);
 
     const response = await fetch(`${url}/v1/chat/completions`, {
       method: 'POST',
@@ -1019,12 +1021,14 @@ class AIService {
                                           '</thinking>'.startsWith(thinkingBuffer);
 
                     if (!possibleTagStart && thinkingBuffer.length > 0) {
-                      console.log('[AI服务-流式] 发送chunk到前端:', thinkingBuffer.length, '字符');
+                      // 🔥 诊断日志（使用warn级别确保可见）
+                      console.warn('[AI服务-流式] ✅ 发送chunk到前端:', thinkingBuffer.length, '字符, hasCallback:', !!onStreamChunk);
                       if (onStreamChunk) onStreamChunk(thinkingBuffer);
                       await maybeYield(thinkingBuffer.length);
                       thinkingBuffer = '';
                     } else if (thinkingBuffer.length > 10) {
-                      console.log('[AI服务-流式] 发送chunk到前端(缓冲区过大):', thinkingBuffer.length, '字符');
+                      // 🔥 诊断日志（使用warn级别确保可见）
+                      console.warn('[AI服务-流式] ✅ 发送chunk到前端(缓冲区过大):', thinkingBuffer.length, '字符, hasCallback:', !!onStreamChunk);
                       if (onStreamChunk) onStreamChunk(thinkingBuffer);
                       await maybeYield(thinkingBuffer.length);
                       thinkingBuffer = '';
@@ -1046,7 +1050,7 @@ class AIService {
       reader.releaseLock();
     }
 
-    console.log(`[AI服务-流式] 完成，总长度: ${rawFullText.length}`);
+    console.warn(`[AI服务-流式] ✅ 完成，总长度: ${rawFullText.length}`);
     return rawFullText;
   }
 

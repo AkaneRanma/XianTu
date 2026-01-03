@@ -85,6 +85,11 @@ export const useUIStore = defineStore('ui', () => {
   // 🔥 [CoT设置] 控制是否使用系统CoT（默认开启，关闭后使用预设中的CoT）
   const useSystemCot = ref(localStorage.getItem('useSystemCot') !== 'false'); // 默认开启
 
+  // 🔥 [分步生成状态] 用于控制第1步完成后UI立即切换
+  const splitStep1Completed = ref(false);
+  const splitStep1Text = ref('');
+  const splitStep2InProgress = ref(false);
+
   function openCharacterManagement() {
     showCharacterManagement.value = true;
   }
@@ -157,6 +162,34 @@ export const useUIStore = defineStore('ui', () => {
     isAIProcessing.value = false;
     sessionStorage.removeItem('ai-processing-state');
     sessionStorage.removeItem('ai-processing-timestamp');
+    // 🔥 重置分步生成状态
+    splitStep1Completed.value = false;
+    splitStep1Text.value = '';
+    splitStep2InProgress.value = false;
+  }
+
+  // 🔥 分步生成第1步完成 - 立即切换UI显示模式
+  function completeSplitStep1(text: string) {
+    splitStep1Completed.value = true;
+    splitStep1Text.value = text;
+    splitStep2InProgress.value = true;
+    // 清除流式内容，停止流式动画
+    streamingContent.value = '';
+    rawStreamingContent.value = '';
+    console.log('[uiStore] 分步生成第1步完成，UI切换到正文显示模式');
+  }
+
+  // 🔥 分步生成第2步完成 - 重置分步状态
+  function completeSplitStep2() {
+    splitStep2InProgress.value = false;
+    console.log('[uiStore] 分步生成第2步完成');
+  }
+
+  // 🔥 重置分步生成状态
+  function resetSplitStepState() {
+    splitStep1Completed.value = false;
+    splitStep1Text.value = '';
+    splitStep2InProgress.value = false;
   }
 
   function updateLoadingText(text: string) {
@@ -171,7 +204,7 @@ export const useUIStore = defineStore('ui', () => {
     if (isLoading.value) {
       isLoading.value = false;
     }
-    
+
     retryDialogConfig.value = config;
     showRetryDialogState.value = true;
   }
@@ -179,7 +212,7 @@ export const useUIStore = defineStore('ui', () => {
   function hideRetryDialog() {
     showRetryDialogState.value = false;
     retryDialogConfig.value = null;
-    
+
     // 恢复之前的loading状态
     if (wasLoadingBeforeDialog.value) {
       isLoading.value = true;
@@ -377,6 +410,14 @@ export const useUIStore = defineStore('ui', () => {
         localStorage.setItem('useSystemCot', String(val));
       }
     }),
+
+    // 🔥 [分步生成状态] 暴露分步生成相关状态和方法
+    splitStep1Completed,
+    splitStep1Text,
+    splitStep2InProgress,
+    completeSplitStep1,
+    completeSplitStep2,
+    resetSplitStepState,
 
     // 暴露用户输入框内容
     userInputText,
