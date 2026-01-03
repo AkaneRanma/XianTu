@@ -32,6 +32,27 @@ export interface Step2APIConfig {
   maxTokens?: number;
 }
 
+/**
+ * 正文优化 API 配置接口
+ * 用于分步生成模式下正文优化（与变量生成并行）的独立API配置
+ */
+export interface TextOptimizationAPIConfig {
+  /** 是否启用正文优化功能 */
+  enabled: boolean;
+  /** API提供商 */
+  provider: APIProvider;
+  /** API端点URL */
+  url: string;
+  /** API密钥 */
+  apiKey: string;
+  /** 模型名称 */
+  model: string;
+  /** 温度参数 (0-2) */
+  temperature?: number;
+  /** 最大Token数 */
+  maxTokens?: number;
+}
+
 export interface AIConfig {
   mode: 'tavern' | 'custom';
   streaming?: boolean;
@@ -50,6 +71,11 @@ export interface AIConfig {
    * 当启用时，第二步（结构化数据生成）将使用此配置而非主API配置
    */
   step2API?: Step2APIConfig;
+  /**
+   * 正文优化的独立API配置
+   * 当启用时，正文优化将使用此配置，与变量生成并行执行
+   */
+  textOptimizationAPI?: TextOptimizationAPIConfig;
 }
 
 // API提供商预设配置
@@ -176,6 +202,100 @@ class AIService {
       this.config.step2API.apiKey &&
       this.config.step2API.model
     );
+  }
+
+  /**
+   * 获取正文优化API配置
+   * 如果启用了独立的正文优化配置则返回该配置，否则返回主API配置
+   * @returns 正文优化使用的API配置
+   */
+  getTextOptimizationConfig(): AIConfig['customAPI'] | null {
+    // 如果启用了正文优化独立API配置
+    if (this.config.textOptimizationAPI?.enabled && this.config.textOptimizationAPI.model) {
+      return {
+        provider: this.config.textOptimizationAPI.provider,
+        url: this.config.textOptimizationAPI.url,
+        apiKey: this.config.textOptimizationAPI.apiKey || this.config.customAPI?.apiKey || '',
+        model: this.config.textOptimizationAPI.model,
+        temperature: this.config.textOptimizationAPI.temperature,
+        maxTokens: this.config.textOptimizationAPI.maxTokens,
+      };
+    }
+    // 否则返回主API配置
+    return this.config.customAPI || null;
+  }
+
+  /**
+   * 检查正文优化是否启用
+   * @returns 是否启用了正文优化功能
+   */
+  hasTextOptimizationConfig(): boolean {
+    return !!(
+      this.config.textOptimizationAPI?.enabled &&
+      this.config.textOptimizationAPI.model &&
+      (this.config.textOptimizationAPI.apiKey || this.config.customAPI?.apiKey)
+    );
+  }
+
+  /**
+   * 使用正文优化API配置生成内容
+   * 专门用于正文优化，使用独立的API配置
+   * @param options 生成参数
+   * @returns 生成的内容
+   */
+  async generateWithTextOptimizationConfig(options: GenerateOptions): Promise<string> {
+    // 保存当前主配置
+    const originalCustomAPI = this.config.customAPI;
+
+    try {
+      // 如果有独立的正文优化配置，临时替换主配置
+      if (this.hasTextOptimizationConfig()) {
+        const textOptConfig = this.getTextOptimizationConfig();
+        if (textOptConfig) {
+          this.config.customAPI = textOptConfig;
+          console.log('[AIService] 使用正文优化独立API配置:', {
+            provider: textOptConfig.provider,
+            model: textOptConfig.model,
+            url: textOptConfig.url ? '已配置' : '未配置'
+          });
+        }
+      }
+
+      // 调用标准generate方法
+      return await this.generate(options);
+    } finally {
+      // 恢复原始配置
+      this.config.customAPI = originalCustomAPI;
+    }
+  }
+
+  /**
+   * 使用正文优化API配置进行generateRaw调用
+   * 专门用于正文优化的纯净生成
+   */
+  async generateRawWithTextOptimizationConfig(options: GenerateOptions): Promise<string> {
+    // 保存当前主配置
+    const originalCustomAPI = this.config.customAPI;
+
+    try {
+      // 如果有独立的正文优化配置，临时替换主配置
+      if (this.hasTextOptimizationConfig()) {
+        const textOptConfig = this.getTextOptimizationConfig();
+        if (textOptConfig) {
+          this.config.customAPI = textOptConfig;
+          console.log('[AIService] 正文优化Raw模式使用独立API配置:', {
+            provider: textOptConfig.provider,
+            model: textOptConfig.model
+          });
+        }
+      }
+
+      // 调用标准generateRaw方法
+      return await this.generateRaw(options);
+    } finally {
+      // 恢复原始配置
+      this.config.customAPI = originalCustomAPI;
+    }
   }
 
   /**

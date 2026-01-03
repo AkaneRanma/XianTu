@@ -1,11 +1,40 @@
 <template>
   <div class="main-game-panel">
-    <!-- 短期记忆区域 -->
+    <!-- 短期记忆区域 + Re-roll 按钮 -->
     <div class="memory-section" v-if="showMemorySection">
-      <div class="memory-header" @click="toggleMemory">
-        <span class="memory-title">{{ t('短期记忆') }}</span>
-        <ChevronDown v-if="memoryExpanded" :size="16" class="memory-icon" />
-        <ChevronRight v-else :size="16" class="memory-icon" />
+      <div class="memory-header-wrapper">
+        <div class="memory-header" @click="toggleMemory">
+          <span class="memory-title">{{ t('短期记忆') }}</span>
+          <ChevronDown v-if="memoryExpanded" :size="16" class="memory-icon" />
+          <ChevronRight v-else :size="16" class="memory-icon" />
+        </div>
+
+        <!-- 🔥 Re-roll 按钮区域（右侧） -->
+        <div class="reroll-buttons" v-if="showRerollButtons">
+          <!-- 重新生成变量按钮 -->
+          <button
+            v-if="canShowRerollStep2"
+            @click="handleRerollStep2"
+            class="reroll-btn reroll-step2"
+            :disabled="isRerollingStep2"
+            :title="t('重新生成游戏变量（保留正文）')"
+          >
+            <RefreshCw :size="14" :class="{ 'animate-spin': isRerollingStep2 }" />
+            <span>{{ t('重新生成变量') }}</span>
+          </button>
+
+          <!-- 重新优化正文按钮 -->
+          <button
+            v-if="canShowRerollOptimization"
+            @click="handleRerollOptimization"
+            class="reroll-btn reroll-optimization"
+            :disabled="isRerollingOptimization"
+            :title="t('重新优化正文内容')"
+          >
+            <Sparkles :size="14" :class="{ 'animate-spin': isRerollingOptimization }" />
+            <span>{{ t('重新优化正文') }}</span>
+          </button>
+        </div>
       </div>
 
       <!-- 下拉悬浮的记忆内容 -->
@@ -53,15 +82,19 @@
           </div>
         </div>
 
-        <!-- 🔥 分步生成第1步完成后：显示完整正文（第2步在后台运行） -->
-        <div v-else-if="isAIProcessing && splitStep1Completed && splitStep1Text" class="narrative-content split-step1-completed">
+        <!-- 🔥 分步生成第1步完成后：显示正文（支持正文优化流式显示） -->
+        <div v-else-if="isAIProcessing && splitStep1Completed && (splitStep1Text || textOptimizationStreamingContent)"
+             class="narrative-content split-step1-completed"
+             :class="{ 'text-optimization-streaming': isTextOptimizationStreaming }">
           <div class="narrative-meta">
             <span class="narrative-time">{{ formatCurrentTime() }}</span>
             <div class="meta-buttons">
-              <!-- 第2步进行中指示器 -->
-              <div v-if="splitStep2InProgress" class="step2-indicator" :title="t('正在处理数据...')">
+              <!-- 并行任务进行中指示器（区分正文优化流式和数据处理） -->
+              <div v-if="anyParallelTaskInProgress" class="step2-indicator" :title="getParallelTaskTooltip()">
                 <span class="streaming-dot"></span>
-                <span class="step2-text">{{ t('数据处理中') }}</span>
+                <span class="step2-text">
+                  {{ isTextOptimizationStreaming ? `${textOptimizationCharCount} 字` : getParallelTaskText() }}
+                </span>
               </div>
               <!-- 重置按钮 -->
               <button
@@ -74,7 +107,8 @@
             </div>
           </div>
           <div class="narrative-text">
-            <FormattedText :text="splitStep1Text" />
+            <!-- 🔥 使用组合后的显示内容（优先显示正文优化结果） -->
+            <FormattedText :text="displayedStep1Content" />
           </div>
         </div>
 
@@ -337,7 +371,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onActivated, onUnmounted, nextTick, computed, watch } from 'vue';
 import {
-  Send, Loader2, ChevronDown, ChevronRight, ScrollText, RotateCcw, Shield, BrainCircuit
+  Send, Loader2, ChevronDown, ChevronRight, ScrollText, RotateCcw, Shield, BrainCircuit, RefreshCw, Sparkles
 } from 'lucide-vue-next';
 import { useI18n } from '@/i18n';
 import { useCharacterStore } from '@/stores/characterStore';
@@ -386,6 +420,86 @@ const streamingCharCount = computed(() => uiStore.streamingContent.length);
 const splitStep1Completed = computed(() => uiStore.splitStep1Completed);
 const splitStep1Text = computed(() => uiStore.splitStep1Text);
 const splitStep2InProgress = computed(() => uiStore.splitStep2InProgress);
+
+// 🔥 正文优化状态
+const textOptimizationInProgress = computed(() => uiStore.textOptimizationInProgress);
+// 🔥 检查是否有任何并行任务在进行中（用于显示"处理中"指示器）
+const anyParallelTaskInProgress = computed(() =>
+  uiStore.splitStep2InProgress || uiStore.textOptimizationInProgress
+);
+
+// 🔥 正文优化流式显示相关
+const textOptimizationStreamingContent = computed(() => uiStore.textOptimizationStreamingContent);
+const isTextOptimizationStreaming = computed(() =>
+  uiStore.textOptimizationInProgress && !!uiStore.textOptimizationStreamingContent
+);
+const textOptimizationCharCount = computed(() =>
+  uiStore.textOptimizationStreamingContent?.length || 0
+);
+
+// 🔥 分步生成第1步完成后显示的内容（优先显示优化后的正文）
+const displayedStep1Content = computed(() => {
+  // 如果有最终优化后的正文，显示它
+  if (uiStore.textOptimizationText) {
+    return uiStore.textOptimizationText;
+  }
+  // 如果正文优化正在进行且有流式内容，显示流式内容
+  if (uiStore.textOptimizationInProgress && uiStore.textOptimizationStreamingContent) {
+    return uiStore.textOptimizationStreamingContent;
+  }
+  // 否则显示原始的第1步正文
+  return splitStep1Text.value;
+});
+
+// 🔥 Re-roll 相关状态
+const isRerollingStep2 = computed(() => uiStore.isRerollingStep2);
+const isRerollingOptimization = computed(() => uiStore.isRerollingOptimization);
+
+// 🔥 是否显示Re-roll按钮区域（在分步生成模式下，第1步完成后显示）
+const showRerollButtons = computed(() => {
+  // 必须在分步生成模式下，且第1步已完成
+  if (!splitStep1Completed.value) return false;
+  // 有可以显示的按钮才显示区域
+  return canShowRerollStep2.value || canShowRerollOptimization.value;
+});
+
+// 🔥 是否显示"重新生成变量"按钮
+const canShowRerollStep2 = computed(() => {
+  // 第1步完成，且有保存的上下文
+  return splitStep1Completed.value && uiStore.canReroll;
+});
+
+// 🔥 是否显示"重新优化正文"按钮
+const canShowRerollOptimization = computed(() => {
+  // 第1步完成，且有保存的上下文，且正文优化功能已启用
+  if (!splitStep1Completed.value || !uiStore.canReroll) return false;
+  // 检查正文优化是否启用（通过检查是否有优化后的文本或正在优化）
+  return uiStore.textOptimizationText !== '' || uiStore.textOptimizationInProgress;
+});
+
+// 🔥 获取并行任务状态文本
+const getParallelTaskText = (): string => {
+  if (uiStore.splitStep2InProgress && uiStore.textOptimizationInProgress) {
+    return t('数据处理中 + 正文优化中');
+  } else if (uiStore.splitStep2InProgress) {
+    return t('数据处理中');
+  } else if (uiStore.textOptimizationInProgress) {
+    return t('正文优化中');
+  }
+  return '';
+};
+
+// 🔥 获取并行任务提示文本
+const getParallelTaskTooltip = (): string => {
+  const tasks: string[] = [];
+  if (uiStore.splitStep2InProgress) {
+    tasks.push(t('正在处理游戏变量数据'));
+  }
+  if (uiStore.textOptimizationInProgress) {
+    tasks.push(t('正在优化正文内容'));
+  }
+  return tasks.join('，') || t('处理中');
+};
 
 const inputRef = ref<HTMLTextAreaElement>();
 const contentAreaRef = ref<HTMLDivElement>();
@@ -529,6 +643,48 @@ const showStateChanges = (log: StateChangeLog | undefined) => {
   }
   // [核心改造] 调用 uiStore 中新的方法来打开专属的 StateChangeViewer 弹窗
   uiStore.openStateChangeViewer(log);
+};
+
+// 🔥 Re-roll 处理方法：重新生成第2步变量
+const handleRerollStep2 = async () => {
+  if (!uiStore.canReroll) {
+    toast.warning(t('没有可用的上下文信息，无法重新生成'));
+    return;
+  }
+  if (isRerollingStep2.value) {
+    toast.info(t('正在重新生成变量，请稍候...'));
+    return;
+  }
+
+  try {
+    toast.info(t('开始重新生成游戏变量...'));
+    await bidirectionalSystem.rerollStep2();
+    toast.success(t('变量重新生成完成'));
+  } catch (error) {
+    console.error('[Re-roll Step2] 失败:', error);
+    toast.error(t('重新生成变量失败，请重试'));
+  }
+};
+
+// 🔥 Re-roll 处理方法：重新优化正文
+const handleRerollOptimization = async () => {
+  if (!uiStore.canReroll) {
+    toast.warning(t('没有可用的上下文信息，无法重新优化'));
+    return;
+  }
+  if (isRerollingOptimization.value) {
+    toast.info(t('正在重新优化正文，请稍候...'));
+    return;
+  }
+
+  try {
+    toast.info(t('开始重新优化正文...'));
+    await bidirectionalSystem.rerollTextOptimization();
+    toast.success(t('正文优化完成'));
+  } catch (error) {
+    console.error('[Re-roll Optimization] 失败:', error);
+    toast.error(t('重新优化正文失败，请重试'));
+  }
 };
 
 // 当前显示的叙述内容
@@ -2250,6 +2406,125 @@ const syncGameState = async () => {
 .step2-text {
   font-weight: 500;
   font-size: 0.75rem;
+}
+
+/* 🔥 短期记忆区域头部包装器 */
+.memory-header-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-header-wrapper .memory-header {
+  flex: 1;
+}
+
+/* 🔥 Re-roll 按钮区域 */
+.reroll-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.reroll-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.reroll-btn:hover:not(:disabled) {
+  color: var(--color-primary);
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.15);
+}
+
+.reroll-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.reroll-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.reroll-btn.reroll-step2 {
+  color: var(--color-success, #22c55e);
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.reroll-btn.reroll-step2:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.4);
+  box-shadow: 0 2px 6px rgba(34, 197, 94, 0.15);
+}
+
+.reroll-btn.reroll-optimization {
+  color: var(--color-warning, #f59e0b);
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.reroll-btn.reroll-optimization:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.4);
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.15);
+}
+
+/* 🔥 旋转动画 */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 🔥 正文优化流式显示样式 */
+.text-optimization-streaming {
+  position: relative;
+}
+
+.text-optimization-streaming::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    var(--color-warning, #f59e0b),
+    var(--color-primary, #6366f1),
+    var(--color-warning, #f59e0b)
+  );
+  background-size: 200% 100%;
+  animation: text-optimization-glow 1.5s ease-in-out infinite;
+  border-radius: 1px;
+}
+
+@keyframes text-optimization-glow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 
 /* 分步生成第1步完成后的叙述内容 */

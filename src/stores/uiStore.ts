@@ -90,6 +90,18 @@ export const useUIStore = defineStore('ui', () => {
   const splitStep1Text = ref('');
   const splitStep2InProgress = ref(false);
 
+  // 🔥 [正文优化状态] 控制正文优化并行执行
+  const textOptimizationInProgress = ref(false);
+  const textOptimizationText = ref('');
+  const textOptimizationStreamingContent = ref('');
+
+  // 🔥 [Re-roll 状态] 用于重新生成变量或正文优化
+  const lastStep1Text = ref('');           // 保存最后一次的原始正文
+  const lastStep1Thinking = ref('');       // 保存最后一次的思维链
+  const lastUserInput = ref('');           // 保存最后一次的用户输入
+  const isRerollingStep2 = ref(false);     // 第2步重新生成中
+  const isRerollingOptimization = ref(false); // 正文优化重新生成中
+
   function openCharacterManagement() {
     showCharacterManagement.value = true;
   }
@@ -190,6 +202,90 @@ export const useUIStore = defineStore('ui', () => {
     splitStep1Completed.value = false;
     splitStep1Text.value = '';
     splitStep2InProgress.value = false;
+  }
+
+  // 🔥 正文优化状态管理
+  function startTextOptimization() {
+    textOptimizationInProgress.value = true;
+    textOptimizationText.value = '';
+    textOptimizationStreamingContent.value = '';
+    console.log('[uiStore] 正文优化开始');
+  }
+
+  function appendTextOptimizationContent(chunk: string) {
+    textOptimizationStreamingContent.value += chunk;
+  }
+
+  function completeTextOptimization(text: string) {
+    textOptimizationInProgress.value = false;
+    textOptimizationText.value = text;
+    textOptimizationStreamingContent.value = '';
+    console.log('[uiStore] 正文优化完成，优化后文本长度:', text.length);
+  }
+
+  function resetTextOptimizationState() {
+    textOptimizationInProgress.value = false;
+    textOptimizationText.value = '';
+    textOptimizationStreamingContent.value = '';
+  }
+
+  // 🔥 Re-roll 相关方法
+  // 保存 Re-roll 所需的上下文（在分步生成第1步完成后调用）
+  function setRerollContext(step1Text: string, step1Thinking: string, userInput: string) {
+    lastStep1Text.value = step1Text;
+    lastStep1Thinking.value = step1Thinking;
+    lastUserInput.value = userInput;
+    console.log('[uiStore] 保存 Re-roll 上下文', {
+      textLength: step1Text.length,
+      thinkingLength: step1Thinking.length,
+      userInputLength: userInput.length
+    });
+  }
+
+  // 开始重新生成第2步
+  function startRerollStep2() {
+    isRerollingStep2.value = true;
+    console.log('[uiStore] 开始重新生成变量（第2步）');
+  }
+
+  // 完成重新生成第2步
+  function completeRerollStep2() {
+    isRerollingStep2.value = false;
+    console.log('[uiStore] 重新生成变量完成');
+  }
+
+  // 开始重新优化正文
+  function startRerollOptimization() {
+    isRerollingOptimization.value = true;
+    textOptimizationText.value = '';
+    textOptimizationStreamingContent.value = '';
+    console.log('[uiStore] 开始重新优化正文');
+  }
+
+  // 完成重新优化正文
+  function completeRerollOptimization(text: string) {
+    isRerollingOptimization.value = false;
+    textOptimizationText.value = text;
+    textOptimizationStreamingContent.value = '';
+    console.log('[uiStore] 重新优化正文完成，长度:', text.length);
+  }
+
+  // 检查是否可以进行 Re-roll
+  function canReroll(): boolean {
+    // 必须有保存的上下文，且当前没有正在进行的任务
+    return !!(lastStep1Text.value &&
+              !isAIProcessing.value &&
+              !isRerollingStep2.value &&
+              !isRerollingOptimization.value);
+  }
+
+  // 🔥 检查是否所有并行任务都已完成（用于退出流式模式）
+  function isAllParallelTasksComplete(): boolean {
+    // 第2步必须完成
+    if (splitStep2InProgress.value) return false;
+    // 如果正文优化正在进行，也需要等待
+    if (textOptimizationInProgress.value) return false;
+    return true;
   }
 
   function updateLoadingText(text: string) {
@@ -418,6 +514,29 @@ export const useUIStore = defineStore('ui', () => {
     completeSplitStep1,
     completeSplitStep2,
     resetSplitStepState,
+
+    // 🔥 [正文优化状态] 暴露正文优化相关状态和方法
+    textOptimizationInProgress,
+    textOptimizationText,
+    textOptimizationStreamingContent,
+    startTextOptimization,
+    appendTextOptimizationContent,
+    completeTextOptimization,
+    resetTextOptimizationState,
+    isAllParallelTasksComplete,
+
+    // 🔥 [Re-roll 状态] 暴露重新生成相关状态和方法
+    lastStep1Text,
+    lastStep1Thinking,
+    lastUserInput,
+    isRerollingStep2,
+    isRerollingOptimization,
+    setRerollContext,
+    startRerollStep2,
+    completeRerollStep2,
+    startRerollOptimization,
+    completeRerollOptimization,
+    canReroll,
 
     // 暴露用户输入框内容
     userInputText,

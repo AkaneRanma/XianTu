@@ -20,6 +20,7 @@ import { normalizeGameTime } from './time';
 import { updateStatusEffects } from './statusEffectManager';
 import { sanitizeAITextForDisplay } from '@/utils/textSanitizer';
 import { stripNsfwContent } from '@/utils/prompts/definitions/dataDefinitions';
+import { textOptimizationService } from '@/services/textOptimizationService';
 
 type PlainObject = Record<string, unknown>;
 
@@ -493,6 +494,9 @@ ${stateJsonString}
         // 这样用户可以在第2步运行时就开始阅读正文
         uiStore.completeSplitStep1(step1Text);
 
+        // 🔥 保存 Re-roll 上下文，用于后续重新生成
+        uiStore.setRerollContext(step1Text, step1Thinking, finalUserInput);
+
         options?.onProgressUpdate?.('分步生成：第2步（记忆/指令/行动选项）…');
         const systemPromptStep2 = await buildSplitSystemPrompt(2);
         const injectsStep2 = buildSplitInjects(systemPromptStep2);
@@ -506,13 +510,14 @@ ${step1Thinking || '（无）'}
 【第1步正文】
 ${step1Text}
 
-请按“分步生成（第2步）”规则输出 JSON。
+请按"分步生成（第2步）"规则输出 JSON。
 `.trim();
 
         // 🔥 第二步不使用流式传输，直接等待完整响应
         console.warn('[AI双向系统] ⚡ 分步生成：第2步开始（禁用流式）');
 
-        response = await generateOnce({
+        // 🔥 并行执行：第2步（变量生成）和正文优化同时进行
+        const step2Promise = generateOnce({
           user_input: step2UserInput,
           should_stream: false, // 🔥 第二步禁用流式传输
           generation_id: `${generationId}_step2`,
@@ -521,7 +526,37 @@ ${step1Text}
           useStep2Config: true, // 第2步使用独立API配置
         });
 
-        console.warn('[AI双向系统] ✅ 分步生成：第2步完成');
+        // 🔥 启动正文优化（如果启用）
+        const textOptimizationPromise = this.executeTextOptimization(
+          step1Text,
+          generationId,
+          uiStore,
+          aiService
+        );
+
+        // 🔥 使用 Promise.allSettled 等待两者完成（即使一个失败也不影响另一个）
+        const [step2Result, optimizationResult] = await Promise.allSettled([
+          step2Promise,
+          textOptimizationPromise
+        ]);
+
+        // 处理第2步结果
+        if (step2Result.status === 'fulfilled') {
+          response = step2Result.value;
+          console.warn('[AI双向系统] ✅ 分步生成：第2步完成');
+        } else {
+          console.error('[AI双向系统] ❌ 分步生成：第2步失败', step2Result.reason);
+          response = '';
+        }
+
+        // 处理正文优化结果
+        let optimizedText: string | null = null;
+        if (optimizationResult.status === 'fulfilled' && optimizationResult.value) {
+          optimizedText = optimizationResult.value;
+          console.log('[AI双向系统] ✅ 正文优化完成，优化后文本长度:', optimizedText.length);
+        } else if (optimizationResult.status === 'rejected') {
+          console.warn('[AI双向系统] ⚠️ 正文优化失败（不影响主流程）:', optimizationResult.reason);
+        }
 
         // 🔥 通知前端第2步完成
         uiStore.completeSplitStep2();
@@ -533,12 +568,19 @@ ${step1Text}
           parsedStep2 = { text: '', mid_term_memory: '', tavern_commands: [], action_options: [] } as GM_Response;
         }
 
+        // 🔥 如果正文优化成功，使用优化后的文本，否则使用原始正文
+        const finalText = optimizedText || step1Text;
+
         gmResponse = {
-          text: step1Text,
+          text: finalText,
           mid_term_memory: parsedStep2.mid_term_memory || '',
           tavern_commands: parsedStep2.tavern_commands || [],
           action_options: uiStore.enableActionOptions ? (parsedStep2.action_options || []) : []
         };
+
+        if (optimizedText) {
+          console.log('[AI双向系统] 使用正文优化后的文本作为最终输出');
+        }
       } else if (tavernHelper) {
         // 酒馆模式
         response = await tavernHelper.generate({
@@ -1741,6 +1783,128 @@ ${saveDataJson}`;
    * 提取记忆总结所需的精简存档数据
    * 与正式游戏交互保持一致：移除叙事历史、短期记忆、隐式中期记忆
    */
+  /**
+   * 执行正文优化（并行任务）
+   * @param originalText 原始正文
+   * @param generationId 生成ID
+   * @param uiStore UI状态存储
+   * @param aiService AI服务
+   * @returns 优化后的文本，如果未启用或失败则返回null
+   */
+  private async executeTextOptimization(
+    originalText: string,
+    generationId: string,
+    uiStore: ReturnType<typeof useUIStore>,
+    aiService: any
+  ): Promise<string | null> {
+    // 检查是否启用正文优化
+    if (!textOptimizationService.isEnabled()) {
+      console.log('[AI双向系统] 正文优化未启用，跳过');
+      return null;
+    }
+
+    // 检查是否有正文优化API配置
+    if (!aiService.hasTextOptimizationConfig()) {
+      console.log('[AI双向系统] 未配置正文优化API，跳过');
+      return null;
+    }
+
+    // 获取启用的条目
+    const enabledEntries = textOptimizationService.getEnabledEntries();
+    if (enabledEntries.length === 0) {
+      console.log('[AI双向系统] 没有启用的正文优化条目，跳过');
+      return null;
+    }
+
+    console.log('[AI双向系统] 开始正文优化，启用条目数:', enabledEntries.length);
+    uiStore.startTextOptimization();
+
+    try {
+      // 构建优化提示词消息
+      const messages = textOptimizationService.buildOptimizationMessages(originalText);
+
+      // 检查正文优化API配置的流式设置
+      const optimizationConfig = aiService.getTextOptimizationConfig();
+      const useStreaming = optimizationConfig?.streaming !== false;
+
+      // 调用正文优化API
+      const tavernHelper = getTavernHelper();
+      let optimizedText: string;
+
+      if (tavernHelper && aiService.getConfig().mode === 'tavern') {
+        // 酒馆模式下使用自定义API的正文优化配置
+        console.log('[AI双向系统] 酒馆模式下正文优化使用独立API配置');
+        optimizedText = await aiService.generateRawWithTextOptimizationConfig({
+          ordered_prompts: messages,
+          should_stream: useStreaming,
+          generation_id: `${generationId}_optimization`,
+          onStreamChunk: useStreaming ? (chunk: string) => {
+            uiStore.appendTextOptimizationContent(chunk);
+          } : undefined,
+        });
+      } else {
+        // 自定义API模式
+        optimizedText = await aiService.generateRawWithTextOptimizationConfig({
+          ordered_prompts: messages,
+          should_stream: useStreaming,
+          generation_id: `${generationId}_optimization`,
+          onStreamChunk: useStreaming ? (chunk: string) => {
+            uiStore.appendTextOptimizationContent(chunk);
+          } : undefined,
+        });
+      }
+
+      // 提取优化后的文本
+      const finalText = this.extractOptimizedText(optimizedText);
+
+      // 通知前端正文优化完成
+      uiStore.completeTextOptimization(finalText);
+
+      console.log('[AI双向系统] 正文优化完成，优化后文本长度:', finalText.length);
+      return finalText;
+    } catch (error) {
+      console.error('[AI双向系统] 正文优化失败:', error);
+      uiStore.resetTextOptimizationState();
+      return null;
+    }
+  }
+
+  /**
+   * 从AI响应中提取优化后的文本
+   */
+  private extractOptimizedText(response: string): string {
+    if (!response || typeof response !== 'string') {
+      return '';
+    }
+
+    const trimmed = response.trim();
+
+    // 尝试从JSON中提取text字段
+    try {
+      // 尝试提取JSON代码块
+      const jsonBlockMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+      if (jsonBlockMatch && jsonBlockMatch[1]) {
+        const jsonObj = JSON.parse(jsonBlockMatch[1].trim());
+        if (jsonObj.text) {
+          return sanitizeAITextForDisplay(jsonObj.text);
+        }
+      }
+
+      // 尝试直接解析JSON
+      const jsonObj = JSON.parse(trimmed);
+      if (jsonObj.text) {
+        return sanitizeAITextForDisplay(jsonObj.text);
+      }
+    } catch {
+      // 不是JSON格式，直接返回原文本
+    }
+
+    // 移除thinking标签
+    const withoutThinking = trimmed.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+
+    return sanitizeAITextForDisplay(withoutThinking);
+  }
+
   private _extractEssentialDataForSummary(saveData: SaveData): SaveData {
     const simplified = cloneDeep(saveData);
 
@@ -1810,6 +1974,193 @@ ${saveDataJson}`;
     });
 
     return summary;
+  }
+
+  /**
+   * 🔥 重新生成第2步（独立变量）
+   * 保留原始正文，只重新生成变量数据
+   */
+  public async rerollStep2(): Promise<any> {
+    const uiStore = useUIStore();
+    const { aiService } = await import('@/services/aiService');
+
+    // 检查是否可以 Re-roll
+    if (!uiStore.canReroll()) {
+      console.warn('[AI双向系统] 无法 Re-roll：没有保存的上下文或正在处理中');
+      return null;
+    }
+
+    const step1Text = uiStore.lastStep1Text;
+    const step1Thinking = uiStore.lastStep1Thinking;
+    const userInput = uiStore.lastUserInput;
+
+    if (!step1Text) {
+      console.warn('[AI双向系统] 无法 Re-roll：没有保存的正文');
+      return null;
+    }
+
+    console.log('[AI双向系统] 开始重新生成变量（第2步）');
+    uiStore.startRerollStep2();
+
+    try {
+      const tavernHelper = getTavernHelper();
+
+      // 🔥 构建简化版的第2步提示词（不依赖内部函数）
+      const step2RulesPrompt = `
+# 分步生成（第2步）规则
+
+你正在执行分步生成的第2步。
+
+## 输出格式：
+\`\`\`json
+{
+  "mid_term_memory": "简洁的记忆总结（1-2句话）",
+  "tavern_commands": [
+    {"action": "set", "key": "变量路径", "value": "值"}
+  ],
+  "action_options": ["选项1", "选项2", "选项3"]
+}
+\`\`\`
+
+## 重要提醒：
+- ❌ 禁止输出 "text" 字段（正文已在第1步生成）
+- ✅ 只输出 mid_term_memory、tavern_commands、action_options
+- tavern_commands 用于更新游戏变量
+- action_options 提供 3-5 个合理的后续行动选项
+`.trim();
+
+      const step2UserInput = `
+【用户本次操作】
+${userInput}
+
+【第1步思维链】
+${step1Thinking || '（无）'}
+
+【第1步正文】
+${step1Text}
+
+请按"分步生成（第2步）"规则输出 JSON。只输出 mid_term_memory、tavern_commands、action_options 三个字段。
+`.trim();
+
+      const generationId = `reroll_step2_${Date.now()}`;
+
+      // 构建消息数组
+      const messages = [
+        { role: 'system' as const, content: step2RulesPrompt },
+        { role: 'user' as const, content: step2UserInput }
+      ];
+
+      // 调用 AI 生成
+      let response: string;
+      const actualMode = aiService.getConfig().mode;
+      const useTavernAPI = tavernHelper && actualMode === 'tavern';
+
+      if (useTavernAPI && aiService.hasStep2IndependentConfig()) {
+        response = await aiService.generateWithStep2Config({
+          ordered_prompts: messages,
+          should_stream: false,
+          generation_id: generationId,
+        });
+      } else if (useTavernAPI) {
+        response = await tavernHelper.generate({
+          user_input: step2UserInput,
+          should_stream: false,
+          generation_id: generationId,
+        });
+      } else if (aiService.hasStep2IndependentConfig()) {
+        response = await aiService.generateWithStep2Config({
+          ordered_prompts: messages,
+          should_stream: false,
+          generation_id: generationId,
+        });
+      } else {
+        response = await aiService.generate({
+          ordered_prompts: messages,
+          should_stream: false,
+          generation_id: generationId,
+        });
+      }
+
+      // 解析响应
+      const parsedStep2 = this.parseAIResponse(String(response));
+
+      console.log('[AI双向系统] ✅ 重新生成变量完成');
+      uiStore.completeRerollStep2();
+
+      return parsedStep2;
+    } catch (error) {
+      console.error('[AI双向系统] ❌ 重新生成变量失败:', error);
+      uiStore.completeRerollStep2();
+      throw error;
+    }
+  }
+
+  /**
+   * 🔥 重新优化正文
+   * 使用当前正文重新执行优化
+   */
+  public async rerollTextOptimization(options?: {
+    onStreamChunk?: (chunk: string) => void;
+  }): Promise<string | null> {
+    const uiStore = useUIStore();
+    const { aiService } = await import('@/services/aiService');
+
+    // 使用保存的正文或当前正文
+    const sourceText = uiStore.lastStep1Text || uiStore.splitStep1Text;
+
+    if (!sourceText) {
+      console.warn('[AI双向系统] 无法重新优化：没有源文本');
+      return null;
+    }
+
+    // 检查是否有正文优化配置
+    if (!aiService.hasTextOptimizationConfig()) {
+      console.warn('[AI双向系统] 无法重新优化：未配置正文优化API');
+      return null;
+    }
+
+    // 检查是否启用正文优化
+    if (!textOptimizationService.isEnabled()) {
+      console.warn('[AI双向系统] 无法重新优化：正文优化未启用');
+      return null;
+    }
+
+    console.log('[AI双向系统] 开始重新优化正文');
+    uiStore.startRerollOptimization();
+
+    try {
+      // 构建优化提示词消息
+      const messages = textOptimizationService.buildOptimizationMessages(sourceText);
+
+      // 🔥 使用全局流式设置（正文优化API配置中没有单独的streaming字段）
+      const useStreaming = uiStore.useStreaming;
+
+      const generationId = `reroll_optimization_${Date.now()}`;
+
+      // 调用正文优化API
+      const optimizedText = await aiService.generateRawWithTextOptimizationConfig({
+        ordered_prompts: messages,
+        should_stream: useStreaming,
+        generation_id: generationId,
+        onStreamChunk: useStreaming ? (chunk: string) => {
+          uiStore.appendTextOptimizationContent(chunk);
+          options?.onStreamChunk?.(chunk);
+        } : undefined,
+      });
+
+      // 提取优化后的文本
+      const finalText = this.extractOptimizedText(optimizedText);
+
+      // 通知前端正文优化完成
+      uiStore.completeRerollOptimization(finalText);
+
+      console.log('[AI双向系统] ✅ 重新优化正文完成，长度:', finalText.length);
+      return finalText;
+    } catch (error) {
+      console.error('[AI双向系统] ❌ 重新优化正文失败:', error);
+      uiStore.completeRerollOptimization('');
+      throw error;
+    }
   }
 
   private parseAIResponse(rawResponse: string): GM_Response {
