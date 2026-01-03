@@ -491,30 +491,38 @@ class AIService {
     // 构建消息列表
     const messages: AIMessage[] = [];
 
-    // 处理 injects（注入的系统提示词）
-    if (options.injects && options.injects.length > 0) {
-      // 按 depth 排序（depth越大越靠前）
-      const sortedInjects = [...options.injects].sort((a, b) => b.depth - a.depth);
-      sortedInjects.forEach(inject => {
-        // 跳过占位消息
-        if (inject.content === '</input>') {
-          return;
-        }
-        messages.push({
-          role: inject.role,
-          content: inject.content
+    // 🔥 优先处理 ordered_prompts（用于 rerollStep2 等场景）
+    if (options.ordered_prompts && options.ordered_prompts.length > 0) {
+      // 过滤掉占位消息
+      const filteredPrompts = options.ordered_prompts.filter(msg => msg.content !== '</input>');
+      messages.push(...filteredPrompts);
+      console.log(`[AI服务-自定义] 已添加 ${messages.length} 条 ordered_prompts 消息`);
+    } else {
+      // 处理 injects（注入的系统提示词）
+      if (options.injects && options.injects.length > 0) {
+        // 按 depth 排序（depth越大越靠前）
+        const sortedInjects = [...options.injects].sort((a, b) => b.depth - a.depth);
+        sortedInjects.forEach(inject => {
+          // 跳过占位消息
+          if (inject.content === '</input>') {
+            return;
+          }
+          messages.push({
+            role: inject.role,
+            content: inject.content
+          });
         });
-      });
-      console.log(`[AI服务-自定义] 已添加 ${messages.length} 条inject消息`);
-    }
+        console.log(`[AI服务-自定义] 已添加 ${messages.length} 条inject消息`);
+      }
 
-    // 添加用户输入
-    if (options.user_input) {
-      messages.push({
-        role: 'user',
-        content: options.user_input
-      });
-      console.log('[AI服务-自定义] 已添加用户输入');
+      // 添加用户输入
+      if (options.user_input) {
+        messages.push({
+          role: 'user',
+          content: options.user_input
+        });
+        console.log('[AI服务-自定义] 已添加用户输入');
+      }
     }
 
     const shouldStream = options.should_stream ?? this.config.streaming ?? false;

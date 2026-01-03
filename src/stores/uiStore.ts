@@ -96,11 +96,16 @@ export const useUIStore = defineStore('ui', () => {
   const textOptimizationStreamingContent = ref('');
 
   // 🔥 [Re-roll 状态] 用于重新生成变量或正文优化
-  const lastStep1Text = ref('');           // 保存最后一次的原始正文
+  const lastStep1Text = ref('');           // 保存最后一次的正文（可能是原始或优化后的，用于显示）
+  const originalStep1Text = ref('');       // 🔥 保存原始正文（永不被优化覆盖，用于变量生成）
   const lastStep1Thinking = ref('');       // 保存最后一次的思维链
   const lastUserInput = ref('');           // 保存最后一次的用户输入
   const isRerollingStep2 = ref(false);     // 第2步重新生成中
   const isRerollingOptimization = ref(false); // 正文优化重新生成中
+
+  // 🔥 [Step2快照] 用于reroll时撤销+应用
+  const step2PreExecuteSnapshot = ref<any>(null);  // Step2执行前的存档快照
+  const originalStep2Snapshot = ref<any>(null);    // 🔥 原始快照（永不被reroll覆盖，始终回到最开始状态）
 
   function openCharacterManagement() {
     showCharacterManagement.value = true;
@@ -178,6 +183,8 @@ export const useUIStore = defineStore('ui', () => {
     splitStep1Completed.value = false;
     splitStep1Text.value = '';
     splitStep2InProgress.value = false;
+    // 🔥 清除原始快照（新一轮生成时需要重新保存）
+    originalStep2Snapshot.value = null;
   }
 
   // 🔥 分步生成第1步完成 - 立即切换UI显示模式
@@ -202,6 +209,8 @@ export const useUIStore = defineStore('ui', () => {
     splitStep1Completed.value = false;
     splitStep1Text.value = '';
     splitStep2InProgress.value = false;
+    // 🔥 清除原始快照（新一轮生成时需要重新保存）
+    originalStep2Snapshot.value = null;
   }
 
   // 🔥 正文优化状态管理
@@ -233,10 +242,12 @@ export const useUIStore = defineStore('ui', () => {
   // 保存 Re-roll 所需的上下文（在分步生成第1步完成后调用）
   function setRerollContext(step1Text: string, step1Thinking: string, userInput: string) {
     lastStep1Text.value = step1Text;
+    originalStep1Text.value = step1Text;  // 🔥 同时保存原始正文（用于变量生成）
     lastStep1Thinking.value = step1Thinking;
     lastUserInput.value = userInput;
     console.log('[uiStore] 保存 Re-roll 上下文', {
       textLength: step1Text.length,
+      originalTextLength: step1Text.length,
       thinkingLength: step1Thinking.length,
       userInputLength: userInput.length
     });
@@ -257,6 +268,7 @@ export const useUIStore = defineStore('ui', () => {
   // 开始重新优化正文
   function startRerollOptimization() {
     isRerollingOptimization.value = true;
+    textOptimizationInProgress.value = true;  // 🔥 启用流式UI模式
     textOptimizationText.value = '';
     textOptimizationStreamingContent.value = '';
     console.log('[uiStore] 开始重新优化正文');
@@ -265,6 +277,7 @@ export const useUIStore = defineStore('ui', () => {
   // 完成重新优化正文
   function completeRerollOptimization(text: string) {
     isRerollingOptimization.value = false;
+    textOptimizationInProgress.value = false;  // 🔥 修复：重置正文优化进行中状态
     textOptimizationText.value = text;
     textOptimizationStreamingContent.value = '';
     console.log('[uiStore] 重新优化正文完成，长度:', text.length);
@@ -277,6 +290,44 @@ export const useUIStore = defineStore('ui', () => {
               !isAIProcessing.value &&
               !isRerollingStep2.value &&
               !isRerollingOptimization.value);
+  }
+
+  // 🔥 保存Step2执行前的存档快照（用于reroll时撤销）
+  function saveStep2Snapshot(saveData: any) {
+    step2PreExecuteSnapshot.value = JSON.parse(JSON.stringify(saveData));
+    console.log('[uiStore] 已保存Step2执行前快照');
+  }
+
+  // 🔥 获取Step2执行前的存档快照
+  function getStep2Snapshot(): any {
+    return step2PreExecuteSnapshot.value;
+  }
+
+  // 🔥 清除Step2快照
+  function clearStep2Snapshot() {
+    step2PreExecuteSnapshot.value = null;
+  }
+
+  // 🔥 保存原始快照（只在第一次调用时保存，永不被reroll覆盖）
+  function saveOriginalStep2Snapshot(saveData: any) {
+    // 只有当原始快照不存在时才保存
+    if (!originalStep2Snapshot.value) {
+      originalStep2Snapshot.value = JSON.parse(JSON.stringify(saveData));
+      console.log('[uiStore] 已保存原始Step2快照（初始状态，永不覆盖）');
+    } else {
+      console.log('[uiStore] 原始Step2快照已存在，跳过保存');
+    }
+  }
+
+  // 🔥 获取原始快照（用于每次reroll都回到最初始状态）
+  function getOriginalStep2Snapshot(): any {
+    return originalStep2Snapshot.value;
+  }
+
+  // 🔥 清除原始快照（在新一轮生成时调用）
+  function clearOriginalStep2Snapshot() {
+    originalStep2Snapshot.value = null;
+    console.log('[uiStore] 已清除原始Step2快照');
   }
 
   // 🔥 检查是否所有并行任务都已完成（用于退出流式模式）
@@ -527,6 +578,7 @@ export const useUIStore = defineStore('ui', () => {
 
     // 🔥 [Re-roll 状态] 暴露重新生成相关状态和方法
     lastStep1Text,
+    originalStep1Text,  // 🔥 暴露原始正文（用于变量生成）
     lastStep1Thinking,
     lastUserInput,
     isRerollingStep2,
@@ -537,6 +589,13 @@ export const useUIStore = defineStore('ui', () => {
     startRerollOptimization,
     completeRerollOptimization,
     canReroll,
+    // 🔥 [Step2快照] 暴露快照相关方法
+    saveStep2Snapshot,
+    getStep2Snapshot,
+    clearStep2Snapshot,
+    saveOriginalStep2Snapshot,
+    getOriginalStep2Snapshot,
+    clearOriginalStep2Snapshot,
 
     // 暴露用户输入框内容
     userInputText,

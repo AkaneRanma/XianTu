@@ -12,13 +12,13 @@
         <!-- 🔥 Re-roll 按钮区域（右侧） -->
         <div class="reroll-buttons" v-if="showRerollButtons">
           <!-- 重新生成变量按钮 -->
-          <button
-            v-if="canShowRerollStep2"
-            @click="handleRerollStep2"
-            class="reroll-btn reroll-step2"
-            :disabled="isRerollingStep2"
-            :title="t('重新生成游戏变量（保留正文）')"
-          >
+            <button
+              v-if="canShowRerollStep2"
+              @click="handleRerollStep2"
+              class="reroll-btn reroll-step2"
+              :disabled="isRerollingStep2 || isRerollingOptimization || splitStep2InProgress || textOptimizationInProgress || isAIProcessing"
+              :title="t('重新生成游戏变量（保留正文）')"
+            >
             <RefreshCw :size="14" :class="{ 'animate-spin': isRerollingStep2 }" />
             <span>{{ t('重新生成变量') }}</span>
           </button>
@@ -28,7 +28,7 @@
             v-if="canShowRerollOptimization"
             @click="handleRerollOptimization"
             class="reroll-btn reroll-optimization"
-            :disabled="isRerollingOptimization"
+            :disabled="isRerollingOptimization || isRerollingStep2 || splitStep2InProgress || textOptimizationInProgress || isAIProcessing"
             :title="t('重新优化正文内容')"
           >
             <Sparkles :size="14" :class="{ 'animate-spin': isRerollingOptimization }" />
@@ -82,8 +82,11 @@
           </div>
         </div>
 
-        <!-- 🔥 分步生成第1步完成后：显示正文（支持正文优化流式显示） -->
-        <div v-else-if="isAIProcessing && splitStep1Completed && (splitStep1Text || textOptimizationStreamingContent)"
+        <!-- 🔥 分步生成第1步完成后：显示正文（支持正文优化流式显示）
+             条件扩展：支持重新优化正文场景（isRerollingOptimization || textOptimizationInProgress）
+             此时 isAIProcessing 可能为false，但仍需显示流式UI -->
+        <div v-else-if="(isAIProcessing && splitStep1Completed && (splitStep1Text || textOptimizationStreamingContent)) ||
+                        ((isRerollingOptimization || textOptimizationInProgress) && (lastStep1Text || textOptimizationStreamingContent))"
              class="narrative-content split-step1-completed"
              :class="{ 'text-optimization-streaming': isTextOptimizationStreaming }">
           <div class="narrative-meta">
@@ -447,34 +450,47 @@ const displayedStep1Content = computed(() => {
   if (uiStore.textOptimizationInProgress && uiStore.textOptimizationStreamingContent) {
     return uiStore.textOptimizationStreamingContent;
   }
-  // 否则显示原始的第1步正文
+  // 🔥 修复：在重新优化场景下，优先使用 lastStep1Text
+  // splitStep1Text 在完成后会被重置为空，而 lastStep1Text 保持不变
+  if (uiStore.lastStep1Text) {
+    return uiStore.lastStep1Text;
+  }
+  // 回退到原始的第1步正文
   return splitStep1Text.value;
 });
 
 // 🔥 Re-roll 相关状态
 const isRerollingStep2 = computed(() => uiStore.isRerollingStep2);
 const isRerollingOptimization = computed(() => uiStore.isRerollingOptimization);
+// 🔥 保存的上一次正文（用于重新优化时显示）
+const lastStep1Text = computed(() => uiStore.lastStep1Text);
 
-// 🔥 是否显示Re-roll按钮区域（在分步生成模式下，第1步完成后显示）
+// 🔥 是否显示Re-roll按钮区域
+// 条件：有保存的上下文（lastStep1Text存在），且当前不在AI处理中
 const showRerollButtons = computed(() => {
-  // 必须在分步生成模式下，且第1步已完成
-  if (!splitStep1Completed.value) return false;
-  // 有可以显示的按钮才显示区域
-  return canShowRerollStep2.value || canShowRerollOptimization.value;
+  // 使用 canReroll 方法检查，该方法检查 lastStep1Text 是否存在
+  // 不依赖 splitStep1Completed，因为生成完成后会被重置
+  const canRerollResult = uiStore.canReroll();
+  // 生成过程中或重新生成中也显示按钮（只是禁用状态）
+  const hasContext = !!uiStore.lastStep1Text;
+  return hasContext;
 });
 
 // 🔥 是否显示"重新生成变量"按钮
 const canShowRerollStep2 = computed(() => {
-  // 第1步完成，且有保存的上下文
-  return splitStep1Completed.value && uiStore.canReroll;
+  // 有保存的上下文即可显示
+  return !!uiStore.lastStep1Text;
 });
 
 // 🔥 是否显示"重新优化正文"按钮
 const canShowRerollOptimization = computed(() => {
-  // 第1步完成，且有保存的上下文，且正文优化功能已启用
-  if (!splitStep1Completed.value || !uiStore.canReroll) return false;
-  // 检查正文优化是否启用（通过检查是否有优化后的文本或正在优化）
-  return uiStore.textOptimizationText !== '' || uiStore.textOptimizationInProgress;
+  // 有保存的上下文
+  if (!uiStore.lastStep1Text) return false;
+  // 检查正文优化是否启用（通过导入 textOptimizationService 检查）
+  // 或者已经有优化后的文本、正在优化中
+  return uiStore.textOptimizationText !== '' ||
+         uiStore.textOptimizationInProgress ||
+         uiStore.isRerollingOptimization;
 });
 
 // 🔥 获取并行任务状态文本
@@ -2242,9 +2258,11 @@ const syncGameState = async () => {
   flex-direction: column;
   position: relative;
   min-width: 0; /* 防止flex收缩问题 */
-  border-radius: 12px; /* 圆角 */
+  border-radius: 0; /* 移除圆角，与其他UI无缝贴合 */
   box-shadow: none !important; /* 移除阴影 */
   background-color: var(--color-surface) !important; /* 提亮叙事区域但不刺眼 */
+  margin: 0; /* 确保无间隙 */
+  padding: 0; /* 确保无间隙 */
 }
 
 /* 流式输出内容样式 */
@@ -2276,7 +2294,7 @@ const syncGameState = async () => {
 
 .content-area {
   background-color: var(--color-surface) !important; /* 提亮内容区 */
-  padding: 20px;
+  padding: 0 0 12px 0; /* 🔥 修复：移除顶部padding，消除与短期记忆区域的缝隙 */
   flex: 1;
   overflow-y: auto;
   scrollbar-width: thin;

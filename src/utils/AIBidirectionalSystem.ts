@@ -554,8 +554,20 @@ ${step1Text}
         if (optimizationResult.status === 'fulfilled' && optimizationResult.value) {
           optimizedText = optimizationResult.value;
           console.log('[AI双向系统] ✅ 正文优化完成，优化后文本长度:', optimizedText.length);
+          // 🔥 更新 lastStep1Text 为优化后的正文，这样reroll变量时使用正确的文本
+          uiStore.lastStep1Text = optimizedText;
+          uiStore.splitStep1Text = optimizedText;
+          console.log('[AI双向系统] 已更新 lastStep1Text 为优化后正文');
         } else if (optimizationResult.status === 'rejected') {
           console.warn('[AI双向系统] ⚠️ 正文优化失败（不影响主流程）:', optimizationResult.reason);
+        }
+
+        // 🔥 保存Step2执行前的快照（用于reroll时撤销+应用）
+        const currentSaveData = gameStateStore.toSaveData();
+        if (currentSaveData) {
+          uiStore.saveStep2Snapshot(currentSaveData);
+          // 🔥 同时保存原始快照（只在第一次保存，后续reroll不会覆盖）
+          uiStore.saveOriginalStep2Snapshot(currentSaveData);
         }
 
         // 🔥 通知前端第2步完成
@@ -1979,9 +1991,12 @@ ${saveDataJson}`;
   /**
    * 🔥 重新生成第2步（独立变量）
    * 保留原始正文，只重新生成变量数据
+   * 使用"撤销+应用"模式：从快照恢复后执行新指令
    */
   public async rerollStep2(): Promise<any> {
     const uiStore = useUIStore();
+    const gameStateStore = useGameStateStore();
+    const characterStore = useCharacterStore();
     const { aiService } = await import('@/services/aiService');
 
     // 检查是否可以 Re-roll
@@ -1990,43 +2005,92 @@ ${saveDataJson}`;
       return null;
     }
 
-    const step1Text = uiStore.lastStep1Text;
+    // 🔥 使用原始正文进行变量生成，而不是可能已被优化的 lastStep1Text
+    const step1Text = uiStore.originalStep1Text || uiStore.lastStep1Text;
     const step1Thinking = uiStore.lastStep1Thinking;
     const userInput = uiStore.lastUserInput;
 
     if (!step1Text) {
-      console.warn('[AI双向系统] 无法 Re-roll：没有保存的正文');
+      console.warn('[AI双向系统] 无法 Re-roll：没有保存的原始正文');
       return null;
     }
 
-    console.log('[AI双向系统] 开始重新生成变量（第2步）');
+    console.log('[AI双向系统] 重新生成变量使用原始正文，长度:', step1Text.length);
+
+    // 🔥 使用原始快照恢复（每次reroll都回到最初始状态）
+    // 如果没有原始快照（兼容旧版本），则回退到使用普通快照
+    let snapshotToRestore = uiStore.getOriginalStep2Snapshot();
+    if (!snapshotToRestore) {
+      console.log('[AI双向系统] 没有原始快照，尝试使用普通快照...');
+      snapshotToRestore = uiStore.getStep2Snapshot();
+    }
+    if (!snapshotToRestore) {
+      console.warn('[AI双向系统] 无法 Re-roll：没有可用的快照');
+      return null;
+    }
+
+    console.log('[AI双向系统] 开始重新生成变量（第2步）- 撤销+应用模式');
     uiStore.startRerollStep2();
 
     try {
       const tavernHelper = getTavernHelper();
+      const tavernEnv = !!tavernHelper;
 
-      // 🔥 构建简化版的第2步提示词（不依赖内部函数）
-      const step2RulesPrompt = `
-# 分步生成（第2步）规则
+      // 🔥 修复：使用完整的提示词（包含 dataDefinitions），与 buildSplitSystemPrompt(2) 一致
+      // 这确保 AI 输出正确的中文 key 路径
+      const [
+        stepRulesPrompt,
+        coreOutputRulesPrompt,
+        businessRulesPrompt,
+        dataDefinitionsPrompt,
+        textFormatsPrompt,
+        worldStandardsPrompt
+      ] = await Promise.all([
+        getPrompt('splitGenerationStep2'),
+        getPrompt('coreOutputRules'),
+        getPrompt('businessRules'),
+        getPrompt('dataDefinitions'),
+        getPrompt('textFormatRules'),
+        getPrompt('worldStandards')
+      ]);
 
-你正在执行分步生成的第2步。
+      // 根据环境处理 NSFW 内容
+      const sanitizedDataDefinitionsPrompt = tavernEnv ? dataDefinitionsPrompt : stripNsfwContent(dataDefinitionsPrompt);
 
-## 输出格式：
-\`\`\`json
-{
-  "mid_term_memory": "简洁的记忆总结（1-2句话）",
-  "tavern_commands": [
-    {"action": "set", "key": "变量路径", "value": "值"}
-  ],
-  "action_options": ["选项1", "选项2", "选项3"]
-}
-\`\`\`
+      // 组装完整的第2步系统提示词
+      const sections: string[] = [
+        stepRulesPrompt.trim(),
+        coreOutputRulesPrompt,
+        businessRulesPrompt,
+        sanitizedDataDefinitionsPrompt,
+        textFormatsPrompt,
+        worldStandardsPrompt
+      ];
 
-## 重要提醒：
-- ❌ 禁止输出 "text" 字段（正文已在第1步生成）
-- ✅ 只输出 mid_term_memory、tavern_commands、action_options
-- tavern_commands 用于更新游戏变量
-- action_options 提供 3-5 个合理的后续行动选项
+      // 如果启用了行动选项，添加相关提示词
+      if (uiStore.enableActionOptions) {
+        const actionOptionsPrompt = await getPrompt('actionOptions');
+        const customPromptSection = uiStore.actionOptionsPrompt
+          ? `**用户自定义要求**：${uiStore.actionOptionsPrompt}\n\n请严格按以上要求生成行动选项。`
+          : '（无特殊要求，按默认规则生成）';
+        sections.push(actionOptionsPrompt.replace('{{CUSTOM_ACTION_PROMPT}}', customPromptSection));
+      }
+
+      // 获取游戏状态JSON
+      const saveData = gameStateStore.toSaveData();
+      const stateForAI = cloneDeep(saveData);
+      if (stateForAI?.记忆) {
+        delete stateForAI.记忆.短期记忆;
+        delete stateForAI.记忆.隐式中期记忆;
+      }
+      if (stateForAI?.叙事历史) delete stateForAI.叙事历史;
+      const stateJsonString = JSON.stringify(stateForAI);
+
+      const step2SystemPrompt = `
+${sections.join('\n\n---\n\n')}
+
+# 游戏状态（JSON）
+${stateJsonString}
 `.trim();
 
       const step2UserInput = `
@@ -2044,10 +2108,10 @@ ${step1Text}
 
       const generationId = `reroll_step2_${Date.now()}`;
 
-      // 构建消息数组
-      const messages = [
-        { role: 'system' as const, content: step2RulesPrompt },
-        { role: 'user' as const, content: step2UserInput }
+      // 构建注入消息
+      const injects: Array<{ content: string; role: 'system' | 'assistant' | 'user'; depth: number; position: 'in_chat' | 'none' }> = [
+        { content: step2SystemPrompt, role: 'system', depth: 4, position: 'in_chat' },
+        { content: '</input>', role: 'assistant', depth: 0, position: 'in_chat' }
       ];
 
       // 调用 AI 生成
@@ -2057,34 +2121,69 @@ ${step1Text}
 
       if (useTavernAPI && aiService.hasStep2IndependentConfig()) {
         response = await aiService.generateWithStep2Config({
-          ordered_prompts: messages,
+          user_input: step2UserInput,
           should_stream: false,
           generation_id: generationId,
+          injects: injects as any,
         });
       } else if (useTavernAPI) {
         response = await tavernHelper.generate({
           user_input: step2UserInput,
           should_stream: false,
           generation_id: generationId,
+          injects: injects as any,
         });
       } else if (aiService.hasStep2IndependentConfig()) {
         response = await aiService.generateWithStep2Config({
-          ordered_prompts: messages,
+          user_input: step2UserInput,
           should_stream: false,
           generation_id: generationId,
+          injects: injects as any,
         });
       } else {
         response = await aiService.generate({
-          ordered_prompts: messages,
+          user_input: step2UserInput,
           should_stream: false,
           generation_id: generationId,
+          injects: injects as any,
         });
       }
 
       // 解析响应
       const parsedStep2 = this.parseAIResponse(String(response));
 
-      console.log('[AI双向系统] ✅ 重新生成变量完成');
+      // 🔥 撤销：从快照恢复游戏状态（每次都回到最初始状态）
+      console.log('[AI双向系统] 从快照恢复游戏状态（回到最初始状态）...');
+      gameStateStore.loadFromSaveData(snapshotToRestore);
+
+      // 🔥 应用：执行新的AI指令
+      // 构造GM_Response，使用当前显示的正文（可能已被优化），而不是原始正文
+      const displayText = uiStore.lastStep1Text || step1Text;
+      const gmResponseForReroll: GM_Response = {
+        text: displayText,  // 🔥 使用显示正文，保持优化后的版本
+        mid_term_memory: parsedStep2.mid_term_memory || '',
+        tavern_commands: parsedStep2.tavern_commands || [],
+        action_options: parsedStep2.action_options || []
+      };
+
+      // 执行指令并更新状态
+      const currentSaveData = gameStateStore.toSaveData();
+      if (currentSaveData) {
+        const { saveData: updatedSaveData, stateChanges } = await this.processGmResponse(
+          gmResponseForReroll,
+          currentSaveData
+        );
+
+        // 🔥 不再更新快照，保持原始快照不变
+        // 这样每次reroll都能回到最初始状态
+
+        // 🔥 保存游戏
+        await characterStore.saveCurrentGame();
+
+        console.log('[AI双向系统] ✅ 重新生成变量完成，已应用新指令');
+        console.log('[AI双向系统] 状态变更数量:', stateChanges.changes.length);
+      }
+
       uiStore.completeRerollStep2();
 
       return parsedStep2;
@@ -2153,6 +2252,24 @@ ${step1Text}
 
       // 通知前端正文优化完成
       uiStore.completeRerollOptimization(finalText);
+
+      // 🔥 更新显示文本和短期记忆
+      if (finalText) {
+        // 更新显示的正文文本
+        uiStore.lastStep1Text = finalText;
+        uiStore.splitStep1Text = finalText;
+
+        // 更新短期记忆中的最后一条
+        const gameStateStore = useGameStateStore();
+        const memory = gameStateStore.memory;
+        const shortTermMemory = memory?.短期记忆;
+        if (memory && shortTermMemory && shortTermMemory.length > 0) {
+          const timePrefix = this._formatGameTime(gameStateStore.toSaveData()?.游戏时间);
+          const lastIndex = shortTermMemory.length - 1;
+          shortTermMemory[lastIndex] = `${timePrefix}${finalText}`;
+          console.log('[AI双向系统] 已更新短期记忆中的最后一条');
+        }
+      }
 
       console.log('[AI双向系统] ✅ 重新优化正文完成，长度:', finalText.length);
       return finalText;
