@@ -10,6 +10,28 @@ import axios from 'axios';
 export type APIProvider = 'openai' | 'claude' | 'gemini' | 'deepseek' | 'custom';
 
 // ============ 配置接口 ============
+
+/**
+ * Step2 API 配置接口
+ * 用于分步生成模式下第二步（结构化数据生成）的独立API配置
+ */
+export interface Step2APIConfig {
+  /** 是否启用独立的Step2 API配置 */
+  enabled: boolean;
+  /** API提供商 */
+  provider: APIProvider;
+  /** API端点URL */
+  url: string;
+  /** API密钥 */
+  apiKey: string;
+  /** 模型名称 */
+  model: string;
+  /** 温度参数 (0-2) */
+  temperature?: number;
+  /** 最大Token数 */
+  maxTokens?: number;
+}
+
 export interface AIConfig {
   mode: 'tavern' | 'custom';
   streaming?: boolean;
@@ -23,6 +45,11 @@ export interface AIConfig {
     temperature?: number;
     maxTokens?: number;
   };
+  /**
+   * 分步生成第二步的独立API配置
+   * 当启用时，第二步（结构化数据生成）将使用此配置而非主API配置
+   */
+  step2API?: Step2APIConfig;
 }
 
 // API提供商预设配置
@@ -119,6 +146,39 @@ class AIService {
   }
 
   /**
+   * 获取Step2 API配置
+   * 如果启用了独立的Step2配置则返回该配置，否则返回主API配置
+   * @returns Step2使用的API配置
+   */
+  getStep2Config(): AIConfig['customAPI'] | null {
+    // 如果启用了Step2独立API配置
+    if (this.config.step2API?.enabled && this.config.step2API.apiKey && this.config.step2API.model) {
+      return {
+        provider: this.config.step2API.provider,
+        url: this.config.step2API.url,
+        apiKey: this.config.step2API.apiKey,
+        model: this.config.step2API.model,
+        temperature: this.config.step2API.temperature,
+        maxTokens: this.config.step2API.maxTokens,
+      };
+    }
+    // 否则返回主API配置
+    return this.config.customAPI || null;
+  }
+
+  /**
+   * 检查Step2是否有独立配置
+   * @returns 是否启用了独立的Step2 API配置
+   */
+  hasStep2IndependentConfig(): boolean {
+    return !!(
+      this.config.step2API?.enabled &&
+      this.config.step2API.apiKey &&
+      this.config.step2API.model
+    );
+  }
+
+  /**
    * 获取可用模型列表
    */
   async fetchModels(): Promise<string[]> {
@@ -150,6 +210,67 @@ class AIService {
       return this.generateWithTavern(options);
     } else {
       return this.generateWithCustomAPI(options);
+    }
+  }
+
+  /**
+   * 使用Step2配置生成内容
+   * 专门用于分步生成模式的第二步，使用独立的API配置
+   * @param options 生成参数
+   * @returns 生成的内容
+   */
+  async generateWithStep2Config(options: GenerateOptions): Promise<string> {
+    // 保存当前主配置
+    const originalCustomAPI = this.config.customAPI;
+
+    try {
+      // 如果有独立的Step2配置，临时替换主配置
+      if (this.hasStep2IndependentConfig()) {
+        const step2Config = this.getStep2Config();
+        if (step2Config) {
+          this.config.customAPI = step2Config;
+          console.log('[AIService] 使用Step2独立API配置:', {
+            provider: step2Config.provider,
+            model: step2Config.model,
+            url: step2Config.url ? '已配置' : '未配置'
+          });
+        }
+      }
+
+      // 调用标准generate方法
+      return await this.generate(options);
+    } finally {
+      // 恢复原始配置
+      this.config.customAPI = originalCustomAPI;
+    }
+  }
+
+  /**
+   * 使用Step2配置进行generateRaw调用
+   * 专门用于分步生成模式的第二步纯净生成
+   */
+  async generateRawWithStep2Config(options: GenerateOptions): Promise<string> {
+    // 保存当前主配置
+    const originalCustomAPI = this.config.customAPI;
+
+    try {
+      // 如果有独立的Step2配置，临时替换主配置
+      if (this.hasStep2IndependentConfig()) {
+        const step2Config = this.getStep2Config();
+        if (step2Config) {
+          this.config.customAPI = step2Config;
+          console.log('[AIService] Step2 Raw模式使用独立API配置:', {
+            provider: step2Config.provider,
+            model: step2Config.model
+          });
+        }
+      }
+
+      // 调用标准generateRaw方法
+      return await this.generateRaw(options);
+    } finally {
+      // 恢复原始配置
+      this.config.customAPI = originalCustomAPI;
     }
   }
 

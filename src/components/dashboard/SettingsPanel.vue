@@ -428,6 +428,159 @@
             </div>
           </div>
 
+          <!-- Step2 独立API配置（仅在分步生成启用时显示） -->
+          <template v-if="settings.splitResponseGeneration">
+            <div class="setting-item">
+              <div class="setting-info">
+                <label class="setting-name">{{ t('第二步使用独立API') }}</label>
+                <span class="setting-desc">{{ t('为第二步（结构化数据生成）配置独立的API和模型') }}</span>
+              </div>
+              <div class="setting-control">
+                <label class="setting-switch">
+                  <input type="checkbox" v-model="aiConfig.step2API.enabled" />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <template v-if="aiConfig.step2API.enabled">
+              <div class="setting-item">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 API提供商') }}</label>
+                  <span class="setting-desc">{{ t('第二步使用的AI服务提供商') }}</span>
+                </div>
+                <div class="setting-control">
+                  <select
+                    v-model="aiConfig.step2API.provider"
+                    class="setting-select"
+                    @change="onStep2ProviderChange"
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="claude">Claude</option>
+                    <option value="gemini">Gemini</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="custom">{{ t('自定义(OpenAI兼容)') }}</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-full">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 API地址') }}</label>
+                  <span class="setting-desc">{{
+                    aiConfig.step2API.provider === 'custom'
+                      ? t('OpenAI兼容的API端点')
+                      : t('可使用默认地址或自定义代理')
+                  }}</span>
+                </div>
+                <div class="setting-control-full">
+                  <input
+                    v-model="aiConfig.step2API.url"
+                    class="form-input-inline"
+                    :placeholder="
+                      API_PROVIDER_PRESETS[aiConfig.step2API.provider]?.url ||
+                      'https://api.openai.com'
+                    "
+                  />
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-full">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 API密钥') }}</label>
+                  <span class="setting-desc">{{ t('第二步使用的API Key（留空则使用主API密钥）') }}</span>
+                </div>
+                <div class="setting-control-full">
+                  <input
+                    v-model="aiConfig.step2API.apiKey"
+                    type="password"
+                    class="form-input-inline"
+                    :placeholder="t('留空使用主API密钥')"
+                  />
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 模型名称') }}</label>
+                  <span class="setting-desc">{{ t('第二步使用的AI模型') }}</span>
+                </div>
+                <div class="setting-control">
+                  <select v-model="aiConfig.step2API.model" class="setting-select">
+                    <option v-for="model in step2AvailableModels" :key="model" :value="model">
+                      {{ model }}
+                    </option>
+                  </select>
+                  <button
+                    class="utility-btn"
+                    @click="fetchStep2Models"
+                    :disabled="isFetchingStep2Models"
+                    style="margin-left: 0.5rem"
+                  >
+                    <RefreshCw :size="16" :class="{ 'loading-pulse': isFetchingStep2Models }" />
+                    {{ isFetchingStep2Models ? t('获取中...') : t('获取') }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 温度参数') }}</label>
+                  <span class="setting-desc">{{ t('第二步生成的随机性（建议较低值以确保结构化输出稳定）') }}</span>
+                </div>
+                <div class="setting-control">
+                  <div class="range-container">
+                    <input
+                      type="range"
+                      v-model.number="aiConfig.step2API.temperature"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      class="setting-range"
+                    />
+                    <span class="range-value">{{ aiConfig.step2API.temperature }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 最大Token数') }}</label>
+                  <span class="setting-desc">{{ t('第二步生成的最大长度') }}</span>
+                </div>
+                <div class="setting-control">
+                  <input
+                    v-model.number="aiConfig.step2API.maxTokens"
+                    type="number"
+                    class="setting-select"
+                    placeholder="4000"
+                    min="100"
+                    max="8000"
+                  />
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-info">
+                  <label class="setting-name">{{ t('Step2 API测试') }}</label>
+                  <span class="setting-desc">{{ t('测试第二步独立API连通性') }}</span>
+                </div>
+                <div class="setting-control" style="display: flex; gap: 0.5rem; align-items: center">
+                  <button class="utility-btn" @click="testStep2Api" :disabled="step2ApiTestState === 'testing'">
+                    <FlaskConical :size="16" :class="{ 'loading-pulse': step2ApiTestState === 'testing' }" />
+                    {{ step2ApiTestState === 'testing' ? t('测试中...') : t('测试') }}
+                  </button>
+                  <span v-if="step2ApiTestState === 'success'" class="auth-status verified">{{ t('成功') }}</span>
+                  <span v-else-if="step2ApiTestState === 'fail'" class="auth-status unverified">{{ t('失败') }}</span>
+                  <button v-if="step2ApiTestState !== 'idle'" class="utility-btn" @click="openStep2ApiTestDetails">
+                    <FileText :size="16" />
+                    {{ t('详情') }}
+                  </button>
+                </div>
+              </div>
+            </template>
+          </template>
+
           <div class="setting-item">
             <div class="setting-info">
               <label class="setting-name">{{ t('记忆总结模式') }}</label>
@@ -636,6 +789,15 @@ const aiConfig = reactive({
     model: 'gpt-4o',
     temperature: 0.7,
     maxTokens: 16000
+  },
+  step2API: {
+    enabled: false,
+    provider: 'openai' as APIProvider,
+    url: '',
+    apiKey: '',
+    model: 'gpt-4o-mini',
+    temperature: 0.3,
+    maxTokens: 4000
   }
 });
 
@@ -659,9 +821,24 @@ const onProviderChange = () => {
   aiService.saveConfig(aiConfig);
 };
 
+// Step2 API提供商切换处理
+const onStep2ProviderChange = () => {
+  const preset = API_PROVIDER_PRESETS[aiConfig.step2API.provider];
+  if (preset && aiConfig.step2API.provider !== 'custom') {
+    aiConfig.step2API.url = preset.url;
+    aiConfig.step2API.model = preset.defaultModel;
+    step2AvailableModels.value = [preset.defaultModel];
+  }
+  aiService.saveConfig(aiConfig);
+};
+
 // 可用模型列表
 const availableModels = ref<string[]>(['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo']);
 const isFetchingModels = ref(false);
+
+// Step2 可用模型列表
+const step2AvailableModels = ref<string[]>(['gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4']);
+const isFetchingStep2Models = ref(false);
 
 // 道号修改相关
 const newPlayerName = ref('');
@@ -718,10 +895,59 @@ const fetchModels = async () => {
   }
 };
 
+// 获取Step2模型列表
+const fetchStep2Models = async () => {
+  if (isFetchingStep2Models.value) return;
+
+  isFetchingStep2Models.value = true;
+  try {
+    aiService.saveConfig(aiConfig);
+    const step2Config = aiConfig.step2API;
+    const url = step2Config.url || API_PROVIDER_PRESETS[step2Config.provider]?.url || '';
+    const apiKey = step2Config.apiKey || aiConfig.customAPI.apiKey;
+
+    if (!url || !apiKey) {
+      throw new Error('请先配置Step2 API地址和密钥');
+    }
+
+    const modelsUrl = url.replace(/\/v1\/?$/, '') + '/v1/models';
+    const response = await fetch(modelsUrl, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`获取模型失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const models = data.data?.map((m: any) => m.id) || [];
+
+    if (models.length > 0) {
+      step2AvailableModels.value = models;
+      localStorage.setItem('ai_step2_available_models', JSON.stringify(models));
+      toast.success(`成功获取 ${models.length} 个Step2模型`);
+    } else {
+      toast.warning('未获取到Step2模型列表');
+    }
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : '获取Step2模型失败');
+  } finally {
+    isFetchingStep2Models.value = false;
+  }
+};
+
 const AI_API_TEST_TOKEN = '仙途本-连通测试-OK';
 const aiApiTestState = ref<'idle' | 'testing' | 'success' | 'fail'>('idle');
 const aiApiTestResponse = ref('');
 const aiApiTestError = ref('');
+
+// Step2 API测试状态
+const step2ApiTestState = ref<'idle' | 'testing' | 'success' | 'fail'>('idle');
+const step2ApiTestResponse = ref('');
+const step2ApiTestError = ref('');
 
 const normalizeAIApiTestText = (text: string): string => {
   return String(text || '')
@@ -792,6 +1018,69 @@ const testAIApi = async () => {
     aiApiTestState.value = 'fail';
     toast.error(`AI API测试失败：${message}`);
   }
+};
+
+// Step2 API测试
+const testStep2Api = async () => {
+  if (step2ApiTestState.value === 'testing') return;
+
+  step2ApiTestState.value = 'testing';
+  step2ApiTestResponse.value = '';
+  step2ApiTestError.value = '';
+
+  try {
+    if (!aiConfig.step2API.enabled) {
+      throw new Error('请先启用Step2独立API');
+    }
+
+    const prompt = [
+      '你正在进行AI API连通性测试。',
+      `请仅输出以下字符串（必须包含且尽量一致）：${AI_API_TEST_TOKEN}`,
+      '不要输出解释、标点或多余文字。',
+    ].join('\n');
+
+    const response = await aiService.generateWithStep2Config({
+      user_input: prompt,
+      should_stream: false,
+      generation_id: `step2_api_test_${Date.now()}`,
+    });
+
+    const text = String(response ?? '').trim();
+    step2ApiTestResponse.value = text;
+
+    const ok = normalizeAIApiTestText(text).includes(normalizeAIApiTestText(AI_API_TEST_TOKEN));
+    if (!ok) {
+      throw new Error(`未检测到特征串「${AI_API_TEST_TOKEN}」`);
+    }
+
+    step2ApiTestState.value = 'success';
+    toast.success(`Step2 API测试成功：检测到「${AI_API_TEST_TOKEN}」`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    step2ApiTestError.value = message;
+    step2ApiTestState.value = 'fail';
+    toast.error(`Step2 API测试失败：${message}`);
+  }
+};
+
+// Step2 API测试详情
+const openStep2ApiTestDetails = () => {
+  uiStore.showDetailModal({
+    title: t('Step2 API测试详情'),
+    content: [
+      `Token: ${AI_API_TEST_TOKEN}`,
+      `Provider: ${aiConfig.step2API.provider}`,
+      `Model: ${aiConfig.step2API.model}`,
+      `URL: ${aiConfig.step2API.url || '(使用默认)'}`,
+      `API Key: ${aiConfig.step2API.apiKey ? '(已配置)' : '(使用主API密钥)'}`,
+      step2ApiTestError.value ? `Error: ${step2ApiTestError.value}` : '',
+      '',
+      'Response:',
+      step2ApiTestResponse.value || '(empty)',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  });
 };
 
 // 监听AI配置变化

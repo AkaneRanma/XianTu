@@ -329,13 +329,42 @@ ${stateJsonString}
           return splitInjects;
         };
 
-        const generateOnce = async (args: { user_input: string; should_stream: boolean; generation_id: string; injects: any; onStreamChunk?: (chunk: string) => void; }) => {
+        const generateOnce = async (args: {
+          user_input: string;
+          should_stream: boolean;
+          generation_id: string;
+          injects: any;
+          onStreamChunk?: (chunk: string) => void;
+          useStep2Config?: boolean; // 是否使用Step2独立API配置
+        }) => {
           if (tavernHelper) {
+            // 酒馆模式下，如果启用了Step2独立配置且当前是第2步
+            if (args.useStep2Config && aiService.hasStep2IndependentConfig()) {
+              // 酒馆环境下使用自定义API的Step2配置
+              console.log('[AI双向系统] 酒馆模式下Step2使用独立API配置');
+              return await aiService.generateWithStep2Config({
+                user_input: args.user_input,
+                should_stream: args.should_stream,
+                generation_id: args.generation_id,
+                injects: args.injects,
+                onStreamChunk: args.onStreamChunk,
+              });
+            }
             return await tavernHelper.generate({
               user_input: args.user_input,
               should_stream: args.should_stream,
               generation_id: args.generation_id,
               injects: args.injects,
+            });
+          }
+          // 自定义API模式
+          if (args.useStep2Config) {
+            return await aiService.generateWithStep2Config({
+              user_input: args.user_input,
+              should_stream: args.should_stream,
+              generation_id: args.generation_id,
+              injects: args.injects,
+              onStreamChunk: args.onStreamChunk,
             });
           }
           return await aiService.generate({
@@ -397,6 +426,7 @@ ${step1Text}
           generation_id: `${generationId}_step2`,
           injects: injectsStep2 as any,
           onStreamChunk: options?.onStreamChunk,
+          useStep2Config: true, // 第2步使用独立API配置
         });
 
         let parsedStep2: GM_Response;
