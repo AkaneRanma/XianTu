@@ -1,9 +1,50 @@
 <template>
   <div class="formatted-text">
     <template v-for="(part, index) in parsedText" :key="index">
-      <span v-if="part.type !== 'judgement-card'" :class="getPartClass(part.type)">
+      <!-- 普通文本类型 -->
+      <span v-if="part.type !== 'judgement-card' && part.type !== 'image-marker'" :class="getPartClass(part.type)">
         {{ part.content }}
       </span>
+
+      <!-- 图像标记类型 -->
+      <div v-else-if="part.type === 'image-marker' && isImageMarkerData(part.content)" class="image-marker-container">
+        <!-- 已生成的图片 -->
+        <div v-if="getImageState(part.content.id)?.imageData" class="generated-image-wrapper">
+          <img
+            :src="getImageState(part.content.id)?.imageData"
+            :alt="part.content.tags"
+            class="generated-image"
+            @click="openImagePreview(getImageState(part.content.id)?.imageData || '', part.content.tags)"
+          />
+          <div class="image-overlay">
+            <button class="image-action-btn" @click="openImagePreview(getImageState(part.content.id)?.imageData || '', part.content.tags)" title="预览">
+              🔍
+            </button>
+            <button class="image-action-btn" @click="regenerateImage(part.content)" title="重新生成">
+              🔄
+            </button>
+          </div>
+        </div>
+        <!-- 生成中状态 -->
+        <div v-else-if="getImageState(part.content.id)?.loading" class="image-loading">
+          <div class="loading-spinner"></div>
+          <span>生成中...</span>
+        </div>
+        <!-- 生成失败状态 -->
+        <div v-else-if="getImageState(part.content.id)?.error" class="image-error">
+          <span class="error-icon">⚠️</span>
+          <span class="error-text">{{ getImageState(part.content.id)?.error }}</span>
+          <button class="retry-btn" @click="generateImage(part.content)">重试</button>
+        </div>
+        <!-- 待生成按钮 -->
+        <button v-else class="generate-image-btn" @click="generateImage(part.content)">
+          <span class="btn-icon">🎨</span>
+          <span class="btn-text">生成图片</span>
+          <span class="btn-tags">{{ truncateTags(part.content.tags) }}</span>
+        </button>
+      </div>
+
+      <!-- 判定卡片类型 -->
       <div v-else-if="isJudgementData(part.content)" class="judgement-card" :class="{
         'is-success': isSuccessResult(part.content.result),
         'is-failure': isFailureResult(part.content.result),
@@ -81,6 +122,27 @@
       </div>
     </template>
   </div>
+
+  <!-- 图片预览弹窗 -->
+  <Teleport to="body">
+    <div v-if="previewImage" class="image-preview-overlay" @click="closeImagePreview">
+      <div class="image-preview-modal" @click.stop>
+        <div class="preview-header">
+          <span class="preview-title">图片预览</span>
+          <button class="preview-close-btn" @click="closeImagePreview">×</button>
+        </div>
+        <div class="preview-body">
+          <img :src="previewImage" :alt="previewTags" class="preview-image" />
+        </div>
+        <div class="preview-footer">
+          <span class="preview-tags">{{ previewTags }}</span>
+          <button class="download-btn" @click="downloadImage">
+            <span>📥</span> 下载图片
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 
   <!-- 判定规则帮助弹窗 -->
   <Teleport to="body">
@@ -233,9 +295,89 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onMounted, nextTick } from 'vue'
+import { novelAIService } from '@/services/novelAIService'
+import { imageCacheService, generateCacheKey } from '@/services/imageCacheService'
+import { useNovelAIStore } from '@/stores/novelAIStore'
+import { toast } from '@/utils/toast'
 
 const showHelpModal = ref(false)
+
+// 获取 Pinia Store
+const novelAIStore = useNovelAIStore()
+
+// 图片预览状态
+const previewImage = ref<string | null>(null)
+const previewTags = ref('')
+
+// 图像状态类型
+interface ImageState {
+  loading: boolean
+  imageData: string | null
+  error: string | null
+}
+
+// 获取图像状态（从 store）
+function getImageState(id: string): ImageState | null {
+  return novelAIStore.getImageState(id)
+}
+
+// 生成图像
+async function generateImage(marker: ImageMarkerData) {
+  const id = marker.id
+
+  // 设置加载状态
+  novelAIStore.startGeneration(id)
+
+  try {
+    const result = await novelAIService.generateImage({ tags: marker.tags })
+
+    if (result.success && result.imageBase64) {
+      novelAIStore.completeGeneration(id, true, result.imageBase64)
+    } else {
+      novelAIStore.completeGeneration(id, false, undefined, result.error || '生成失败')
+    }
+  } catch (e) {
+    novelAIStore.completeGeneration(id, false, undefined, e instanceof Error ? e.message : '未知错误')
+  }
+}
+
+// 重新生成图像
+function regenerateImage(marker: ImageMarkerData) {
+  generateImage(marker)
+}
+
+// 打开图片预览
+function openImagePreview(imageData: string, tags: string) {
+  previewImage.value = imageData
+  previewTags.value = tags
+}
+
+// 关闭图片预览
+function closeImagePreview() {
+  previewImage.value = null
+  previewTags.value = ''
+}
+
+// 下载图片
+function downloadImage() {
+  if (!previewImage.value) return
+
+  const link = document.createElement('a')
+  link.href = previewImage.value
+  link.download = `novelai-${Date.now()}.png`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  toast.success('图片已下载')
+}
+
+// 截断标签显示
+function truncateTags(tags: string): string {
+  if (tags.length <= 30) return tags
+  return tags.slice(0, 30) + '...'
+}
 
 const showJudgementHelp = () => {
   showHelpModal.value = true
@@ -258,18 +400,102 @@ interface JudgementData {
   details?: string[]
 }
 
-interface TextPart {
-  type: 'environment' | 'psychology' | 'dialogue' | 'judgement-card' | 'normal' | 'quote'
-  content: string | JudgementData
+interface ImageMarkerData {
+  id: string
+  tags: string
+  originalText: string
 }
 
-const isJudgementData = (content: string | JudgementData): content is JudgementData => {
+interface TextPart {
+  type: 'environment' | 'psychology' | 'dialogue' | 'judgement-card' | 'normal' | 'quote' | 'image-marker'
+  content: string | JudgementData | ImageMarkerData
+}
+
+const isJudgementData = (content: string | JudgementData | ImageMarkerData): content is JudgementData => {
   return typeof content === 'object' && content !== null && 'title' in content
+}
+
+const isImageMarkerData = (content: string | JudgementData | ImageMarkerData): content is ImageMarkerData => {
+  return typeof content === 'object' && content !== null && 'tags' in content && 'id' in content
 }
 
 const props = defineProps<{
   text: string
 }>()
+
+// 获取 Novel AI 配置中的标记设置
+const getImageMarkers = () => {
+  const config = novelAIService.getConfig()
+  return {
+    startMarker: config.startMarker || 'image###',
+    endMarker: config.endMarker || '###',
+    enabled: config.enabled,
+    autoGenerate: config.autoGenerate
+  }
+}
+
+// 生成稳定的 ID（基于内容哈希，确保相同内容始终生成相同 ID）
+const generateStableMarkerId = (tags: string, position: number) => {
+  // 使用简单的字符串哈希
+  let hash = 0
+  const str = `${tags}_${position}`
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash // Convert to 32bit integer
+  }
+  return `img_${Math.abs(hash).toString(36)}`
+}
+
+// 从缓存恢复图片状态
+async function tryRestoreFromCache(marker: ImageMarkerData) {
+  const id = marker.id
+
+  // 如果已经有状态（正在加载或已加载），跳过
+  if (novelAIStore.getImageState(id)) return
+
+  try {
+    const config = novelAIService.getConfig()
+    const preset = config.currentPreset ? novelAIService.getPreset(config.currentPreset) : null
+
+    // 构建缓存键参数
+    const cacheParams = {
+      tags: marker.tags,
+      presetName: preset?.name || '',
+      fixedPrompt: preset?.fixedPrompt || '',
+      fixedPrompt_end: preset?.fixedPrompt_end || '',
+      negativePrompt: preset?.negativePrompt || '',
+      model: config.model,
+      sampler: config.sampler,
+      width: config.width,
+      height: config.height,
+      steps: config.steps,
+      cfg: config.promptGuidance,
+      seed: config.seed // seed 为 0 时每次生成不同，无法匹配缓存
+    }
+
+    // 只有非随机 seed 时才尝试从缓存恢复
+    if (config.seed !== 0) {
+      const cacheKey = await generateCacheKey(cacheParams)
+      const cached = await imageCacheService.get(cacheKey)
+
+      if (cached) {
+        novelAIStore.setImageState(id, {
+          loading: false,
+          imageData: cached.imageBase64,
+          error: null
+        })
+        console.log(`[NovelAI] 从缓存恢复图片: ${id}`)
+        return
+      }
+    }
+
+    // 没有缓存，尝试用最近的任意匹配
+    // 这里可以扩展为更智能的匹配逻辑
+  } catch (e) {
+    console.warn('[NovelAI] 缓存恢复失败:', e)
+  }
+}
 
 const parsedText = computed(() => {
   const parts: TextPart[] = []
@@ -278,6 +504,9 @@ const parsedText = computed(() => {
   if (!text.trim()) {
     return [{ type: 'normal', content: text }]
   }
+
+  // 获取图像标记配置
+  const { startMarker, endMarker, enabled: imageEnabled } = getImageMarkers()
 
   let currentIndex = 0
   // 统一换行并规范化引号（压缩重复的中英文引号，避免解析异常）
@@ -381,6 +610,28 @@ const parsedText = computed(() => {
           contentStart: judgementStart + 1,
           contentEnd: judgementEnd
         })
+      }
+    }
+
+    // 🎨 图像标记 (如: image###tags###)
+    if (imageEnabled && startMarker && endMarker) {
+      let searchPos = currentIndex
+      while (searchPos < processedText.length) {
+        const imgStart = processedText.indexOf(startMarker, searchPos)
+        if (imgStart === -1) break
+
+        const imgEnd = processedText.indexOf(endMarker, imgStart + startMarker.length)
+        if (imgEnd === -1) break
+
+        markers.push({
+          start: imgStart,
+          end: imgEnd + endMarker.length,
+          type: 'image' as const,
+          contentStart: imgStart + startMarker.length,
+          contentEnd: imgEnd
+        })
+
+        searchPos = imgEnd + endMarker.length
       }
     }
 
@@ -509,6 +760,41 @@ const parsedText = computed(() => {
         } else {
           // 解析失败，作为普通文本处理
           parts.push({ type: 'normal', content: `〖${markedContent}〗` })
+        }
+      } else if (nextMarker.type === 'image') {
+        // 解析图像标记
+        const tags = processedText.slice(nextMarker.contentStart, nextMarker.contentEnd).trim()
+        if (tags) {
+          // 使用稳定的 ID，基于标记位置和内容
+          const stableId = generateStableMarkerId(tags, nextMarker.start)
+
+          const imageMarker: ImageMarkerData = {
+            id: stableId,
+            tags: tags,
+            originalText: processedText.slice(nextMarker.start, nextMarker.end)
+          }
+          parts.push({
+            type: 'image-marker',
+            content: imageMarker
+          })
+
+          // 尝试从缓存恢复（异步操作，不阻塞渲染）
+          nextTick(() => {
+            if (!novelAIStore.getImageState(stableId)) {
+              tryRestoreFromCache(imageMarker)
+            }
+          })
+
+          // 如果开启自动生成，则自动触发生成
+          const { autoGenerate } = getImageMarkers()
+          if (autoGenerate && !novelAIStore.getImageState(imageMarker.id)) {
+            // 使用 nextTick 避免在 computed 中直接修改响应式状态
+            nextTick(() => {
+              if (!novelAIStore.getImageState(imageMarker.id)) {
+                generateImage(imageMarker)
+              }
+            })
+          }
         }
       } else {
         parts.push({
@@ -1377,5 +1663,355 @@ const parseDetailSource = (detail: string) => {
 
 [data-theme="dark"] .detail-source {
   color: #64748b;
+}
+
+/* ========== 图像标记样式 ========== */
+
+.image-marker-container {
+  display: block;
+  margin: 1rem 0;
+  text-indent: 0;
+}
+
+/* 生成图片按钮 */
+.generate-image-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1.25rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+  max-width: 100%;
+}
+
+.generate-image-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+}
+
+.generate-image-btn:active {
+  transform: translateY(0);
+}
+
+.generate-image-btn .btn-icon {
+  font-size: 1.25rem;
+}
+
+.generate-image-btn .btn-text {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.generate-image-btn .btn-tags {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 加载状态 */
+.image-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
+  border-radius: 12px;
+  border: 2px dashed #94a3b8;
+  color: #64748b;
+  font-size: 0.95rem;
+}
+
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 错误状态 */
+.image-error {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border-radius: 12px;
+  border: 1px solid #fca5a5;
+}
+
+.image-error .error-icon {
+  font-size: 1.25rem;
+}
+
+.image-error .error-text {
+  flex: 1;
+  color: #b91c1c;
+  font-size: 0.9rem;
+}
+
+.image-error .retry-btn {
+  padding: 0.5rem 1rem;
+  background: #ef4444;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.image-error .retry-btn:hover {
+  background: #dc2626;
+}
+
+/* 已生成图片 */
+.generated-image-wrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.generated-image {
+  display: block;
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+}
+
+.generated-image:hover {
+  transform: scale(1.02);
+}
+
+.image-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.generated-image-wrapper:hover .image-overlay {
+  opacity: 1;
+}
+
+.image-action-btn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.image-action-btn:hover {
+  background: white;
+  transform: scale(1.1);
+}
+
+/* ========== 图片预览弹窗 ========== */
+
+.image-preview-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+  animation: fadeIn 0.2s ease;
+}
+
+.image-preview-modal {
+  display: flex;
+  flex-direction: column;
+  max-width: 90vw;
+  max-height: 90vh;
+  background: rgba(15, 23, 42, 0.95);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.preview-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.preview-close-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preview-close-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.preview-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.preview-tags {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+/* ========== 深色主题适配 - 图像相关 ========== */
+
+[data-theme="dark"] .image-loading {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.05) 100%);
+  border-color: #475569;
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .loading-spinner {
+  border-color: #475569;
+  border-top-color: #667eea;
+}
+
+[data-theme="dark"] .image-error {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+[data-theme="dark"] .image-error .error-text {
+  color: #fca5a5;
+}
+
+/* 响应式适配 */
+@media (max-width: 640px) {
+  .generate-image-btn {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .generate-image-btn .btn-tags {
+    max-width: 100%;
+  }
+
+  .generated-image {
+    max-height: 300px;
+  }
+
+  .image-preview-modal {
+    max-width: 95vw;
+    max-height: 95vh;
+  }
+
+  .preview-image {
+    max-height: 60vh;
+  }
+
+  .preview-footer {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .preview-tags {
+    text-align: center;
+  }
 }
 </style>

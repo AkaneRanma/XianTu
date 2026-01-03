@@ -39,6 +39,15 @@
             <span class="tab-label">正文优化</span>
             <span v-if="draftConfig.textOptimizationAPI?.enabled" class="tab-badge">独立</span>
           </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'novelai' }"
+            @click="activeTab = 'novelai'"
+          >
+            <span class="tab-icon">🎨</span>
+            <span class="tab-label">图像生成</span>
+            <span v-if="novelAIConfig.enabled" class="tab-badge">已启用</span>
+          </button>
         </div>
 
         <!-- Tab 内容 -->
@@ -307,6 +316,257 @@
               启用后可对AI生成的正文进行优化处理，支持流式输出
             </div>
           </div>
+
+          <!-- Novel AI 图像生成配置 -->
+          <div v-if="activeTab === 'novelai'" class="config-section">
+            <div class="section-hint">
+              <span class="hint-icon">💡</span>
+              <span>配置 Novel AI 文生图功能，支持在正文中生成图片</span>
+            </div>
+
+            <div class="config-row">
+              <label class="config-label">启用图像生成</label>
+              <label class="switch">
+                <input type="checkbox" v-model="novelAIConfig.enabled" />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <template v-if="novelAIConfig.enabled">
+              <!-- 模型与接口 -->
+              <div class="config-group-title">模型与接口</div>
+
+              <div class="config-row">
+                <label class="config-label">API Key</label>
+                <input
+                  v-model="novelAIConfig.apiKey"
+                  type="password"
+                  class="config-input"
+                  placeholder="pst-..."
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">站点</label>
+                <select v-model="novelAIConfig.site" class="config-select">
+                  <option value="official">官网 (api.novelai.net)</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+
+              <div v-if="novelAIConfig.site === 'custom'" class="config-row">
+                <label class="config-label">自定义URL</label>
+                <input
+                  v-model="novelAIConfig.customUrl"
+                  class="config-input"
+                  placeholder="https://your-api-url.com"
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">模型</label>
+                <select v-model="novelAIConfig.model" class="config-select">
+                  <option v-for="model in novelAIModels" :key="model.value" :value="model.value">
+                    {{ model.label }}
+                  </option>
+                </select>
+              </div>
+
+              <!-- 采样与算法 -->
+              <div class="config-group-title">采样与算法</div>
+
+              <div class="config-row">
+                <label class="config-label">采样方法</label>
+                <select v-model="novelAIConfig.sampler" class="config-select">
+                  <option v-for="sampler in novelAISamplers" :key="sampler.value" :value="sampler.value">
+                    {{ sampler.label }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">噪点表</label>
+                <select v-model="novelAIConfig.noiseSchedule" class="config-select">
+                  <option v-for="schedule in novelAINoiseSchedules" :key="schedule.value" :value="schedule.value">
+                    {{ schedule.label }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">提示词引导 ({{ novelAIConfig.promptGuidance.toFixed(1) }})</label>
+                <input
+                  type="range"
+                  v-model.number="novelAIConfig.promptGuidance"
+                  min="0" max="10" step="0.1"
+                  class="config-range"
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">多样性 (SMEA)</label>
+                <label class="switch">
+                  <input type="checkbox" v-model="novelAIConfig.variety" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">AI 默认角色位置</label>
+                <label class="switch">
+                  <input type="checkbox" v-model="novelAIConfig.aiDefaultPosition" />
+                  <span class="slider"></span>
+                </label>
+                <span class="config-hint-inline">开启后 AI 将自动调整角色位置</span>
+              </div>
+
+              <!-- 尺寸与比例 -->
+              <div class="config-group-title">尺寸与比例</div>
+
+              <div class="config-row">
+                <label class="config-label">预设尺寸</label>
+                <select v-model="novelAIConfig.sizePreset" class="config-select" @change="onSizePresetChange">
+                  <option v-for="preset in novelAISizePresets" :key="preset.value" :value="preset.value">
+                    {{ preset.label }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">宽度</label>
+                <input
+                  v-model.number="novelAIConfig.width"
+                  type="number"
+                  class="config-input config-input-short"
+                  min="64" max="2048" step="64"
+                  :disabled="novelAIConfig.sizePreset !== 'custom'"
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">高度</label>
+                <input
+                  v-model.number="novelAIConfig.height"
+                  type="number"
+                  class="config-input config-input-short"
+                  min="64" max="2048" step="64"
+                  :disabled="novelAIConfig.sizePreset !== 'custom'"
+                />
+              </div>
+
+              <!-- 渲染控制 -->
+              <div class="config-group-title">渲染控制</div>
+
+              <div class="config-row">
+                <label class="config-label">生成步数 ({{ novelAIConfig.steps }})</label>
+                <input
+                  type="range"
+                  v-model.number="novelAIConfig.steps"
+                  min="1" max="50" step="1"
+                  class="config-range"
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">种子</label>
+                <input
+                  v-model.number="novelAIConfig.seed"
+                  type="number"
+                  class="config-input config-input-short"
+                  min="0"
+                  placeholder="0 = 随机"
+                />
+              </div>
+
+              <!-- 标记设置 -->
+              <div class="config-group-title">标记设置</div>
+
+              <div class="config-row">
+                <label class="config-label">开始标记</label>
+                <input
+                  v-model="novelAIConfig.startMarker"
+                  class="config-input config-input-short"
+                  placeholder="image###"
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">结束标记</label>
+                <input
+                  v-model="novelAIConfig.endMarker"
+                  class="config-input config-input-short"
+                  placeholder="###"
+                />
+              </div>
+
+              <div class="config-row">
+                <label class="config-label">自动生成</label>
+                <label class="switch">
+                  <input type="checkbox" v-model="novelAIConfig.autoGenerate" />
+                  <span class="slider"></span>
+                </label>
+                <span class="config-hint-inline">检测到标记时自动生成图片</span>
+              </div>
+
+              <!-- 提示词预设 -->
+              <div class="config-group-title">提示词预设</div>
+
+              <div class="config-row">
+                <label class="config-label">当前预设</label>
+                <div class="config-row-inline">
+                  <select v-model="novelAIConfig.currentPreset" class="config-select">
+                    <option value="">无预设</option>
+                    <option v-for="preset in novelAIPresets" :key="preset.name" :value="preset.name">
+                      {{ preset.name }}
+                    </option>
+                  </select>
+                  <button class="btn-icon" @click="showPresetModal = true" title="管理预设">
+                    ⚙️
+                  </button>
+                </div>
+              </div>
+
+              <!-- 测试连接 -->
+              <div class="config-row">
+                <button class="btn-test" @click="testNovelAIConnection" :disabled="testingNovelAI">
+                  {{ testingNovelAI ? '测试中...' : '🧪 测试连接' }}
+                </button>
+                <span v-if="testResults.novelai === 'success'" class="test-result success">✓ 成功</span>
+                <span v-else-if="testResults.novelai === 'fail'" class="test-result fail">✗ 失败</span>
+              </div>
+
+              <!-- 缓存管理 -->
+              <div class="config-group-title">缓存管理</div>
+
+              <div class="cache-stats">
+                <div class="cache-stat-item">
+                  <span class="cache-stat-label">已缓存图片</span>
+                  <span class="cache-stat-value">{{ cacheStats.totalEntries }} 张</span>
+                </div>
+                <div class="cache-stat-item">
+                  <span class="cache-stat-label">缓存大小</span>
+                  <span class="cache-stat-value">{{ formatCacheSize(cacheStats.totalSize) }} / 100 MB</span>
+                </div>
+                <div v-if="cacheStats.oldestEntry" class="cache-stat-item">
+                  <span class="cache-stat-label">最早缓存</span>
+                  <span class="cache-stat-value">{{ formatDate(cacheStats.oldestEntry) }}</span>
+                </div>
+              </div>
+
+              <div class="config-row">
+                <button class="btn-secondary-small" @click="cleanExpiredCache">
+                  清理过期缓存
+                </button>
+                <button class="btn-danger-small" @click="clearAllCache">
+                  清空所有缓存
+                </button>
+              </div>
+            </template>
+
+            <div v-else class="disabled-hint">
+              启用后可使用 Novel AI 在正文中生成图片，支持标记触发和缓存
+            </div>
+          </div>
         </div>
       </div>
 
@@ -315,14 +575,32 @@
         <button class="btn btn-primary" @click="save">保存</button>
       </div>
     </div>
+
+    <!-- Novel AI 预设管理弹窗 -->
+    <NovelAIPresetModal
+      :open="showPresetModal"
+      @close="showPresetModal = false"
+      @update="onPresetUpdate"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, computed } from 'vue';
+import { ref, reactive, watch, computed, onMounted } from 'vue';
 import { aiService, API_PROVIDER_PRESETS, type AIConfig, type APIProvider } from '@/services/aiService';
 import { textOptimizationService } from '@/services/textOptimizationService';
+import { novelAIService } from '@/services/novelAIService';
+import { imageCacheService } from '@/services/imageCacheService';
 import { toast } from '@/utils/toast';
+import NovelAIPresetModal from '@/components/common/NovelAIPresetModal.vue';
+import type { NovelAIConfig, NovelAIPromptPreset, ImageCacheStats } from '@/types/novelAI';
+import {
+  NOVELAI_MODELS,
+  NOVELAI_SAMPLERS,
+  NOVELAI_NOISE_SCHEDULES,
+  NOVELAI_SIZE_PRESETS,
+  DEFAULT_NOVELAI_CONFIG
+} from '@/types/novelAI';
 
 const props = defineProps<{
   open: boolean;
@@ -334,7 +612,7 @@ const emit = defineEmits<{
 }>();
 
 // 当前激活的Tab
-const activeTab = ref<'text' | 'variable' | 'optimization'>('text');
+const activeTab = ref<'text' | 'variable' | 'optimization' | 'novelai'>('text');
 
 // 草稿配置
 const draftConfig = reactive<AIConfig>({
@@ -382,14 +660,34 @@ const fetchingOptimizationModels = ref(false);
 const testingText = ref(false);
 const testingVariable = ref(false);
 const testingOptimization = ref(false);
-const testResults = reactive<{ text: string; variable: string; optimization: string }>({
+const testingNovelAI = ref(false);
+const testResults = reactive<{ text: string; variable: string; optimization: string; novelai: string }>({
   text: '',
   variable: '',
   optimization: '',
+  novelai: '',
+});
+
+// Novel AI 配置
+const novelAIConfig = reactive<NovelAIConfig>({ ...DEFAULT_NOVELAI_CONFIG });
+const novelAIPresets = ref<NovelAIPromptPreset[]>([]);
+const showPresetModal = ref(false);
+
+// Novel AI 选项
+const novelAIModels = NOVELAI_MODELS;
+const novelAISamplers = NOVELAI_SAMPLERS;
+const novelAINoiseSchedules = NOVELAI_NOISE_SCHEDULES;
+const novelAISizePresets = NOVELAI_SIZE_PRESETS;
+
+// 缓存统计
+const cacheStats = reactive<ImageCacheStats>({
+  totalEntries: 0,
+  totalSize: 0,
+  oldestEntry: null
 });
 
 // 监听弹窗打开，加载配置
-watch(() => props.open, (isOpen) => {
+watch(() => props.open, async (isOpen) => {
   if (isOpen) {
     const config = aiService.getConfig();
     Object.assign(draftConfig, JSON.parse(JSON.stringify(config)));
@@ -434,10 +732,19 @@ watch(() => props.open, (isOpen) => {
       draftConfig.textOptimizationAPI.enabled = textOptimizationService.isEnabled();
     }
 
+    // 加载 Novel AI 配置
+    const naiConfig = novelAIService.getConfig();
+    Object.assign(novelAIConfig, naiConfig);
+    novelAIPresets.value = novelAIService.getPresets();
+
+    // 加载缓存统计
+    await loadCacheStats();
+
     // 重置测试结果
     testResults.text = '';
     testResults.variable = '';
     testResults.optimization = '';
+    testResults.novelai = '';
 
     // 加载保存的模型列表
     loadSavedModels();
@@ -626,6 +933,97 @@ async function testAPI(type: 'text' | 'variable' | 'optimization') {
   }
 }
 
+// Novel AI 尺寸预设变更
+function onSizePresetChange() {
+  const preset = NOVELAI_SIZE_PRESETS.find(p => p.value === novelAIConfig.sizePreset);
+  if (preset && preset.value !== 'custom') {
+    novelAIConfig.width = preset.width;
+    novelAIConfig.height = preset.height;
+  }
+}
+
+// 测试 Novel AI 连接
+async function testNovelAIConnection() {
+  testingNovelAI.value = true;
+  testResults.novelai = '';
+
+  try {
+    // 临时保存配置
+    novelAIService.saveConfig(novelAIConfig);
+
+    const result = await novelAIService.testConnection();
+
+    if (result.success) {
+      testResults.novelai = 'success';
+      toast.success('Novel AI 连接测试成功');
+    } else {
+      testResults.novelai = 'fail';
+      toast.error(`Novel AI 测试失败: ${result.message}`);
+    }
+  } catch (error) {
+    testResults.novelai = 'fail';
+    toast.error(`Novel AI 测试失败: ${error instanceof Error ? error.message : '未知错误'}`);
+  } finally {
+    testingNovelAI.value = false;
+  }
+}
+
+// 加载缓存统计
+async function loadCacheStats() {
+  try {
+    const stats = await imageCacheService.getStats();
+    cacheStats.totalEntries = stats.totalEntries;
+    cacheStats.totalSize = stats.totalSize;
+    cacheStats.oldestEntry = stats.oldestEntry;
+  } catch (e) {
+    console.warn('加载缓存统计失败:', e);
+  }
+}
+
+// 清理过期缓存
+async function cleanExpiredCache() {
+  try {
+    const count = await imageCacheService.cleanExpired();
+    await loadCacheStats();
+    toast.success(`已清理 ${count} 个过期缓存`);
+  } catch (e) {
+    toast.error('清理缓存失败');
+  }
+}
+
+// 清空所有缓存
+async function clearAllCache() {
+  if (!confirm('确定要清空所有图片缓存吗？此操作不可恢复。')) {
+    return;
+  }
+
+  try {
+    await imageCacheService.clearAll();
+    await loadCacheStats();
+    toast.success('已清空所有缓存');
+  } catch (e) {
+    toast.error('清空缓存失败');
+  }
+}
+
+// 格式化缓存大小
+function formatCacheSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// 格式化日期
+function formatDate(date: Date | null): string {
+  if (!date) return '-';
+  return new Date(date).toLocaleDateString('zh-CN');
+}
+
+// 预设更新回调
+function onPresetUpdate() {
+  novelAIPresets.value = novelAIService.getPresets();
+}
+
 // 关闭弹窗
 function close() {
   emit('close');
@@ -641,6 +1039,10 @@ function save() {
     textOptimizationService.setEnabled(draftConfig.textOptimizationAPI.enabled);
     console.log('[API配置] 同步正文优化启用状态:', draftConfig.textOptimizationAPI.enabled);
   }
+
+  // 保存 Novel AI 配置
+  novelAIService.saveConfig(novelAIConfig);
+  console.log('[API配置] Novel AI 配置已保存:', novelAIConfig.enabled);
 
   emit('save', draftConfig);
   emit('close');
@@ -1005,6 +1407,80 @@ input:checked + .slider:before {
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
 }
 
+.config-group-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #60a5fa;
+  margin-top: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(96, 165, 250, 0.2);
+}
+
+.config-input-short {
+  max-width: 150px;
+}
+
+.config-hint-inline {
+  font-size: 0.8rem;
+  color: rgba(148, 163, 184, 0.7);
+  margin-left: 0.5rem;
+}
+
+.cache-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.cache-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.cache-stat-label {
+  font-size: 0.75rem;
+  color: rgba(148, 163, 184, 0.7);
+}
+
+.cache-stat-value {
+  font-size: 0.9rem;
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+.btn-secondary-small {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.55);
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.btn-secondary-small:hover {
+  background: rgba(51, 65, 85, 0.75);
+}
+
+.btn-danger-small {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.btn-danger-small:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
 @media (max-width: 640px) {
   .config-row {
     flex-direction: column;
@@ -1021,12 +1497,20 @@ input:checked + .slider:before {
     width: 100%;
   }
 
+  .config-input-short {
+    max-width: 100%;
+  }
+
   .tabs {
     overflow-x: auto;
   }
 
   .tab-btn {
     white-space: nowrap;
+  }
+
+  .cache-stats {
+    flex-direction: column;
   }
 }
 </style>

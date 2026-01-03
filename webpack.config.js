@@ -6,6 +6,7 @@ import HtmlWebpackPlugin from 'html-webpack-plugin'
 import HtmlInlineScriptPlugin from 'html-inline-script-webpack-plugin'
 import TavernLiveReloadPlugin from './webpack/TavernLiveReloadPlugin.js'
 import { fileURLToPath } from 'url'
+import { HttpsProxyAgent } from 'https-proxy-agent'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -151,6 +152,27 @@ export default (env, argv) => {
       compress: true,
       port: 8080,
       hot: true,
+      // Novel AI CORS 代理（通过 Clash 代理）
+      proxy: [
+        {
+          // 图像生成 API (2024年4月起使用专用域名)
+          context: ['/novelai-image-proxy'],
+          target: 'https://image.novelai.net',
+          changeOrigin: true,
+          pathRewrite: { '^/novelai-image-proxy': '' },
+          secure: true,
+          agent: new HttpsProxyAgent('http://127.0.0.1:7890'),
+        },
+        {
+          // 用户信息等其他 API
+          context: ['/novelai-user-proxy'],
+          target: 'https://api.novelai.net',
+          changeOrigin: true,
+          pathRewrite: { '^/novelai-user-proxy': '' },
+          secure: true,
+          agent: new HttpsProxyAgent('http://127.0.0.1:7890'),
+        },
+      ],
     },
   }
 }
