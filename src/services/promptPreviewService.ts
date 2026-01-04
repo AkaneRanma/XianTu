@@ -71,6 +71,7 @@ export interface ShortTermMemoryConfig {
   textOptimizationRerollCount: number;  // 正文再优化独立配置
   tavernPresetCount: number;            // 酒馆预设独立配置
   promptTemplate: string;
+  optimizedTextHistoryCount: number;    // 优化正文历史层数（用于生成时的上下文）
 }
 
 export interface PreviewOptions {
@@ -102,6 +103,7 @@ const DEFAULT_MEMORY_CONFIG: ShortTermMemoryConfig = {
   textOptimizationRerollCount: 0,
   tavernPresetCount: 5,
   promptTemplate: DEFAULT_MEMORY_TEMPLATE,
+  optimizedTextHistoryCount: 3,  // 默认使用3层历史优化正文作为上下文
 };
 
 const STORAGE_KEY_MEMORY_CONFIG = 'prompt-preview-memory-config';
@@ -633,7 +635,6 @@ ${step1Text}
   private async generateTextOptimizationPreview(options?: PreviewOptions): Promise<PreviewResult> {
     const messages: PreviewMessage[] = [];
 
-    const memoryCount = options?.shortTermMemoryCount ?? this.memoryConfig.textOptimizationCount;
     const sourceText = options?.step1Text || '（待优化的正文内容将在此显示）';
 
     // 1. 获取正文优化条目（需要检查关键词触发）
@@ -671,17 +672,38 @@ ${step1Text}
       ));
     }
 
-    // 3. 短期记忆（如果配置了）
-    if (memoryCount > 0) {
-      const shortTermMemories = this.getShortTermMemories();
-      if (shortTermMemories.length > 0) {
-        const memoryPrompt = this.formatMemoryPrompt(shortTermMemories, memoryCount);
-        messages.push(this.createMessage('assistant', memoryPrompt, `短期记忆（${Math.min(memoryCount, shortTermMemories.length)}条）`, 2, 'short_term_memory'));
-      }
+    // 3. 历史优化正文（作为上下文）- 始终显示此条目
+    const historyCount = this.memoryConfig.optimizedTextHistoryCount || 0;
+    const totalHistoryLayers = textOptimizationService.getHistoryCount();
+    // 首次优化：使用最新 N 层历史（不排除最新层）
+    const historyTexts = historyCount > 0 ? textOptimizationService.getOptimizedTextHistory(historyCount, false) : [];
+
+    if (historyTexts.length > 0) {
+      // 有历史时显示实际内容
+      const historyContent = historyTexts.map((text, i) => `【历史优化${i + 1}】\n${text}`).join('\n\n---\n\n');
+      messages.push(this.createMessage(
+        'assistant',
+        historyContent,
+        `历史优化正文（配置${historyCount}层，实际${historyTexts.length}层，总共${totalHistoryLayers}层）`,
+        2,
+        'optimized_text_history'
+      ));
+    } else {
+      // 无历史时显示占位信息
+      const placeholderContent = historyCount > 0
+        ? `（当前无历史优化正文，配置使用最新${historyCount}层）\n\n首次生成优化正文后，此处将显示历史上下文。`
+        : `（未配置使用历史优化正文）\n\n可在「记忆设置」中配置「优化正文历史层数」来启用此功能。`;
+      messages.push(this.createMessage(
+        'system',
+        placeholderContent,
+        `历史优化正文（配置${historyCount}层，当前${totalHistoryLayers}层可用）`,
+        2,
+        'optimized_text_history'
+      ));
     }
 
-    // 4. 原始正文
-    messages.push(this.createMessage('user', sourceText, '待优化正文', 0, 'source_text'));
+    // 4. 原始正文（第一步正文）
+    messages.push(this.createMessage('user', sourceText, '待优化正文（第一步正文）', 0, 'source_text'));
 
     // 按depth排序（降序）
     messages.sort((a, b) => b.depth - a.depth);
@@ -694,17 +716,91 @@ ${step1Text}
   private async generateTextOptimizationRerollPreview(options?: PreviewOptions): Promise<PreviewResult> {
     const uiStore = useUIStore();
 
-    // 使用当前显示的正文
-    const currentText = uiStore.lastStep1Text || uiStore.splitStep1Text || '';
+    // 🔥 Re-roll时使用原始正文（未优化的Step1文本）
+    const originalText = uiStore.originalStep1Text || uiStore.lastStep1Text || uiStore.splitStep1Text || '';
 
-    // 使用再优化的独立记忆配置
-    const memoryCount = options?.shortTermMemoryCount ?? this.memoryConfig.textOptimizationRerollCount;
+    // 🔥 正文再优化不使用短期记忆，只使用历史优化正文+第一步正文
+    // 与首次优化相同，但传递 isReroll=true 参数
+    const messages: PreviewMessage[] = [];
+    const sourceText = options?.step1Text || originalText || '（请先生成一次正文）';
 
-    return this.generateTextOptimizationPreview({
-      ...options,
-      shortTermMemoryCount: memoryCount,
-      step1Text: options?.step1Text || currentText || '（请先生成一次正文）',
+    // 1. 获取正文优化条目（需要检查关键词触发）
+    const allEntries = textOptimizationService.getEnabledEntries();
+    const enabledEntries = allEntries.filter(entry => {
+      if (entry.triggerMode === 'keyword') {
+        return this.matchKeywords(entry.keywords || [], sourceText);
+      }
+      return true;
     });
+
+    for (let i = 0; i < enabledEntries.length; i++) {
+      const entry = enabledEntries[i];
+      const triggerInfo = entry.triggerMode === 'keyword' ? ' 🟢' : ' 🔵';
+      messages.push(this.createMessage(
+        entry.role,
+        entry.content,
+        `优化条目: ${entry.name}${triggerInfo}`,
+        entry.depth,
+        `optimization_entry_${i}`
+      ));
+    }
+
+    // 2. 世界书条目（作用于优化）
+    const optimizationWorldBooks = this.getWorldBookEntriesForTarget('optimization', sourceText);
+    for (let i = 0; i < optimizationWorldBooks.length; i++) {
+      const entry = optimizationWorldBooks[i];
+      messages.push(this.createMessage(
+        entry.role,
+        entry.content,
+        `世界书: ${entry.name}`,
+        entry.depth,
+        `world_book_optimization_${i}`
+      ));
+    }
+
+    // 3. 历史优化正文（Re-roll时排除最新层）- 始终显示此条目
+    const historyCount = this.memoryConfig.optimizedTextHistoryCount || 0;
+    const totalHistoryLayers = textOptimizationService.getHistoryCount();
+    // Re-roll场景：排除最新层，使用之前的 N 层历史
+    const historyTexts = historyCount > 0 ? textOptimizationService.getOptimizedTextHistory(historyCount, true) : [];
+
+    if (historyTexts.length > 0) {
+      // 有历史时显示实际内容（排除了最新层）
+      const historyContent = historyTexts.map((text, i) => `【历史优化${i + 1}】\n${text}`).join('\n\n---\n\n');
+      messages.push(this.createMessage(
+        'assistant',
+        historyContent,
+        `历史优化正文（配置${historyCount}层，实际${historyTexts.length}层，排除最新层）`,
+        2,
+        'optimized_text_history'
+      ));
+    } else {
+      // 无历史或只有一层（被排除了）时显示占位信息
+      const hasOnlyOnelayer = totalHistoryLayers === 1;
+      let placeholderContent: string;
+      if (historyCount <= 0) {
+        placeholderContent = `（未配置使用历史优化正文）\n\n可在「记忆设置」中配置「优化正文历史层数」来启用此功能。`;
+      } else if (hasOnlyOnelayer) {
+        placeholderContent = `（当前只有1层历史，Re-roll时排除最新层后无可用历史）\n\n继续生成更多优化正文后，此处将显示历史上下文。`;
+      } else {
+        placeholderContent = `（当前无历史优化正文，配置使用最新${historyCount}层）\n\n首次生成优化正文后，此处将显示历史上下文。`;
+      }
+      messages.push(this.createMessage(
+        'system',
+        placeholderContent,
+        `历史优化正文（配置${historyCount}层，当前${totalHistoryLayers}层可用，Re-roll排除最新）`,
+        2,
+        'optimized_text_history'
+      ));
+    }
+
+    // 4. 原始正文（第一步正文）
+    messages.push(this.createMessage('user', sourceText, '待优化正文（第一步正文）', 0, 'source_text'));
+
+    // 按depth排序（降序）
+    messages.sort((a, b) => b.depth - a.depth);
+
+    return this.calculateResult(messages);
   }
 
   // ==================== 变量再生成预览 ====================

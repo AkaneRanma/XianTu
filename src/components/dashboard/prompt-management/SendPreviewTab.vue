@@ -307,9 +307,11 @@ const getDefaultMemoryCount = (scenario: PreviewScenario): number => {
     case 'variable_reroll':
       return config.variableRerollCount;
     case 'text_optimization':
-      return config.textOptimizationCount;
+      // 正文优化不再使用短期记忆，改为使用历史优化正文
+      return 0;
     case 'text_optimization_reroll':
-      return config.textOptimizationRerollCount;
+      // 重新正文优化不再使用短期记忆，改为使用历史优化正文
+      return 0;
     case 'tavern_preset':
       return config.tavernPresetCount;
     default:

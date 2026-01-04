@@ -122,6 +122,50 @@
               />
             </div>
 
+            <!-- 高级采样参数 -->
+            <div class="config-group-title">高级采样参数</div>
+
+            <div class="config-row">
+              <label class="config-label">Top P ({{ draftConfig.customAPI!.topP?.toFixed(2) ?? '0.98' }})</label>
+              <input
+                type="range"
+                v-model.number="draftConfig.customAPI!.topP"
+                min="0" max="1" step="0.01"
+                class="config-range"
+              />
+            </div>
+
+            <div class="config-row">
+              <label class="config-label">Top K</label>
+              <input
+                v-model.number="draftConfig.customAPI!.topK"
+                type="number"
+                class="config-input config-input-short"
+                placeholder="500"
+                min="0" max="10000"
+              />
+            </div>
+
+            <div class="config-row">
+              <label class="config-label">Frequency Penalty ({{ draftConfig.customAPI!.frequencyPenalty?.toFixed(1) ?? '0' }})</label>
+              <input
+                type="range"
+                v-model.number="draftConfig.customAPI!.frequencyPenalty"
+                min="-2" max="2" step="0.1"
+                class="config-range"
+              />
+            </div>
+
+            <div class="config-row">
+              <label class="config-label">Presence Penalty ({{ draftConfig.customAPI!.presencePenalty?.toFixed(1) ?? '0' }})</label>
+              <input
+                type="range"
+                v-model.number="draftConfig.customAPI!.presencePenalty"
+                min="-2" max="2" step="0.1"
+                class="config-range"
+              />
+            </div>
+
             <div class="config-row">
               <button class="btn-test" @click="testAPI('text')" :disabled="testingText">
                 {{ testingText ? '测试中...' : '🧪 测试连接' }}
@@ -625,6 +669,10 @@ const draftConfig = reactive<AIConfig>({
     model: 'gpt-4o',
     temperature: 0.7,
     maxTokens: 16000,
+    topP: 0.98,
+    topK: 500,
+    frequencyPenalty: 0,
+    presencePenalty: 0,
   },
   step2API: {
     enabled: false,
@@ -701,7 +749,17 @@ watch(() => props.open, async (isOpen) => {
         model: 'gpt-4o',
         temperature: 0.7,
         maxTokens: 16000,
+        topP: 0.98,
+        topK: 500,
+        frequencyPenalty: 0,
+        presencePenalty: 0,
       };
+    } else {
+      // 确保新增字段有默认值
+      if (draftConfig.customAPI.topP === undefined) draftConfig.customAPI.topP = 0.98;
+      if (draftConfig.customAPI.topK === undefined) draftConfig.customAPI.topK = 500;
+      if (draftConfig.customAPI.frequencyPenalty === undefined) draftConfig.customAPI.frequencyPenalty = 0;
+      if (draftConfig.customAPI.presencePenalty === undefined) draftConfig.customAPI.presencePenalty = 0;
     }
     if (!draftConfig.step2API) {
       draftConfig.step2API = {

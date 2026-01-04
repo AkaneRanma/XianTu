@@ -65,6 +65,14 @@ export interface AIConfig {
     model: string;
     temperature?: number;
     maxTokens?: number;
+    /** Top P 采样参数 (0-1) */
+    topP?: number;
+    /** Top K 采样参数 */
+    topK?: number;
+    /** 频率惩罚 (-2 到 2) */
+    frequencyPenalty?: number;
+    /** 存在惩罚 (-2 到 2) */
+    presencePenalty?: number;
   };
   /**
    * 分步生成第二步的独立API配置
@@ -123,7 +131,11 @@ class AIService {
       apiKey: '',
       model: 'gpt-4o',
       temperature: 0.7,
-      maxTokens: 16000  // 输出token上限
+      maxTokens: 16000,  // 输出token上限
+      topP: 0.98,
+      topK: 500,
+      frequencyPenalty: 0,
+      presencePenalty: 0
     }
   };
 
@@ -569,6 +581,44 @@ class AIService {
   }
 
   // OpenAI兼容格式（OpenAI、DeepSeek、自定义）
+
+  /**
+   * 构建请求体，包含所有采样参数
+   */
+  private buildRequestBody(
+    model: string,
+    messages: AIMessage[],
+    temperature: number,
+    maxTokens: number,
+    streaming: boolean
+  ): Record<string, any> {
+    const { topP, topK, frequencyPenalty, presencePenalty } = this.config.customAPI || {};
+
+    const body: Record<string, any> = {
+      model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      stream: streaming
+    };
+
+    // 添加可选的采样参数（仅当设置了非默认值时添加）
+    if (topP !== undefined && topP !== null) {
+      body.top_p = topP;
+    }
+    if (topK !== undefined && topK !== null && topK > 0) {
+      body.top_k = topK;
+    }
+    if (frequencyPenalty !== undefined && frequencyPenalty !== null && frequencyPenalty !== 0) {
+      body.frequency_penalty = frequencyPenalty;
+    }
+    if (presencePenalty !== undefined && presencePenalty !== null && presencePenalty !== 0) {
+      body.presence_penalty = presencePenalty;
+    }
+
+    return body;
+  }
+
   private estimateTokensForText(text: string): number {
     if (!text) return 0;
     let cjkCount = 0;
@@ -657,13 +707,7 @@ class AIService {
 
           const response = await axios.post(
             `${url}/v1/chat/completions`,
-            {
-              model,
-              messages,
-              temperature: temperature || 0.7,
-              max_tokens: safeMaxTokens,
-              stream: false
-            },
+            this.buildRequestBody(model, messages, temperature || 0.7, safeMaxTokens, false),
             {
               headers: {
                 'Authorization': `Bearer ${apiKey}`,
@@ -678,15 +722,10 @@ class AIService {
           return content;
         }
       } else {
+        const requestBody = this.buildRequestBody(model, messages, temperature || 0.7, safeMaxTokens, false);
         const response = await axios.post(
           `${url}/v1/chat/completions`,
-          {
-            model,
-            messages,
-            temperature: temperature || 0.7,
-            max_tokens: safeMaxTokens,
-            stream: false
-          },
+          requestBody,
           {
             headers: {
               'Authorization': `Bearer ${apiKey}`,
@@ -930,6 +969,7 @@ class AIService {
     // 🔥 诊断日志（使用warn级别确保可见）
     console.warn('[AI服务-OpenAI流式] ⚡ 开始流式请求, hasOnStreamChunk:', !!onStreamChunk);
 
+    const requestBody = this.buildRequestBody(model, messages, temperature, maxTokens, true);
     const response = await fetch(`${url}/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -937,13 +977,7 @@ class AIService {
         'Accept': 'text/event-stream',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-        stream: true
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {

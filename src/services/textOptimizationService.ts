@@ -17,10 +17,13 @@ import {
 
 const STORAGE_KEY = 'text_optimization_preset';
 const ENABLED_KEY = 'text_optimization_enabled';
+const HISTORY_KEY = 'text_optimization_history';
+const MAX_HISTORY_SIZE = 10;
 
 class TextOptimizationService {
   private currentPreset: TextOptimizationPreset | null = null;
   private enabled: boolean = false;
+  private optimizedTextHistory: string[] = [];
 
   constructor() {
     this.load();
@@ -52,6 +55,9 @@ class TextOptimizationService {
           version: '1.0.0',
         };
       }
+
+      // 加载优化历史
+      this.loadHistory();
     } catch (e) {
       console.error('[正文优化服务] 加载预设失败:', e);
       this.currentPreset = {
@@ -378,14 +384,117 @@ class TextOptimizationService {
     };
     this.enabled = false;
     this.save();
+    // 重置时也清空优化历史
+    this.clearHistory();
+  }
+
+  // =====================================================
+  // 优化正文历史管理
+  // =====================================================
+
+  /**
+   * 添加优化后的正文到历史（用于首次优化）
+   * @param text 优化后的正文
+   */
+  addOptimizedText(text: string): void {
+    this.optimizedTextHistory.push(text);
+    // 保持最多10层
+    if (this.optimizedTextHistory.length > MAX_HISTORY_SIZE) {
+      this.optimizedTextHistory.shift();
+    }
+    this.saveHistory();
+    console.log('[正文优化服务] 已添加优化正文到历史，当前层数:', this.optimizedTextHistory.length);
+  }
+
+  /**
+   * 替换最新一层优化正文（用于re-roll）
+   * @param text 新的优化正文
+   */
+  replaceLatestOptimizedText(text: string): void {
+    if (this.optimizedTextHistory.length > 0) {
+      this.optimizedTextHistory[this.optimizedTextHistory.length - 1] = text;
+      console.log('[正文优化服务] 已替换最新优化正文历史层');
+    } else {
+      this.optimizedTextHistory.push(text);
+      console.log('[正文优化服务] 历史为空，已添加为第一层');
+    }
+    this.saveHistory();
+  }
+
+  /**
+   * 获取最新N层历史优化正文
+   * @param count 需要的层数
+   * @param excludeLatest 是否排除最新一层（Re-roll时使用）
+   * @returns 历史优化正文数组
+   */
+  getOptimizedTextHistory(count: number, excludeLatest: boolean = false): string[] {
+    if (count <= 0) return [];
+
+    if (excludeLatest && this.optimizedTextHistory.length > 0) {
+      // Re-roll场景：排除最新一层，从倒数第二层开始取
+      const historyWithoutLatest = this.optimizedTextHistory.slice(0, -1);
+      return historyWithoutLatest.slice(-count);
+    }
+
+    // 首次优化场景：正常取最新N层
+    return this.optimizedTextHistory.slice(-count);
+  }
+
+  /**
+   * 获取当前历史层数
+   */
+  getHistoryCount(): number {
+    return this.optimizedTextHistory.length;
+  }
+
+  /**
+   * 清空优化历史
+   */
+  clearHistory(): void {
+    this.optimizedTextHistory = [];
+    localStorage.removeItem(HISTORY_KEY);
+    console.log('[正文优化服务] 已清空优化正文历史');
+  }
+
+  /**
+   * 保存历史到localStorage
+   */
+  private saveHistory(): void {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(this.optimizedTextHistory));
+    } catch (e) {
+      console.error('[正文优化服务] 保存优化历史失败:', e);
+    }
+  }
+
+  /**
+   * 从localStorage加载历史
+   */
+  private loadHistory(): void {
+    try {
+      const saved = localStorage.getItem(HISTORY_KEY);
+      if (saved) {
+        this.optimizedTextHistory = JSON.parse(saved);
+        console.log('[正文优化服务] 已加载优化历史，层数:', this.optimizedTextHistory.length);
+      }
+    } catch (e) {
+      console.warn('[正文优化服务] 加载优化历史失败:', e);
+      this.optimizedTextHistory = [];
+    }
   }
 
   /**
    * 构建正文优化的提示词消息列表
-   * @param originalText 原始正文
+   * @param originalText 原始正文（Step1最新生成的）
+   * @param historyCount 要包含的历史优化正文层数（从配置获取）
+   * @param isReroll 是否为Re-roll场景（Re-roll时需排除最新一层历史）
    * @returns 用于AI调用的消息列表
    */
-  buildOptimizationMessages(originalText: string): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  buildOptimizationMessages(
+    originalText: string,
+    historyCount: number = 0,
+    isReroll: boolean = false
+  ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
     // 获取启用的条目（已按depth排序）
@@ -397,6 +506,23 @@ class TextOptimizationService {
         role: entry.role,
         content: entry.content,
       });
+    }
+
+    // 新增：如果配置了历史层数，添加历史优化正文作为上下文
+    if (historyCount > 0) {
+      // Re-roll时排除最新一层（因为那是要被替换的）
+      const history = this.getOptimizedTextHistory(historyCount, isReroll);
+      if (history.length > 0) {
+        const historyContext = history.map((text, index) =>
+          `【历史优化正文 ${index + 1}】\n${text}`
+        ).join('\n\n---\n\n');
+
+        messages.push({
+          role: 'system',
+          content: `以下是之前的优化正文历史，作为风格参考，请保持一致的写作风格：\n\n${historyContext}`,
+        });
+        console.log('[正文优化服务] 已添加', history.length, '层历史优化正文作为上下文');
+      }
     }
 
     // 添加原始正文作为用户输入

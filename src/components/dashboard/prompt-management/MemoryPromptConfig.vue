@@ -5,7 +5,7 @@
       <div class="section-header">
         <span class="section-title">短期记忆条数配置</span>
       </div>
-      <div class="config-grid-6">
+      <div class="config-grid-4">
         <div class="config-item">
           <label>正文生成</label>
           <input
@@ -43,30 +43,6 @@
           <span class="unit">条</span>
         </div>
         <div class="config-item">
-          <label>正文优化</label>
-          <input
-            type="number"
-            v-model.number="config.textOptimizationCount"
-            min="0"
-            max="20"
-            @change="saveConfig"
-            class="number-input"
-          />
-          <span class="unit">条</span>
-        </div>
-        <div class="config-item">
-          <label>优化再生成</label>
-          <input
-            type="number"
-            v-model.number="config.textOptimizationRerollCount"
-            min="0"
-            max="20"
-            @change="saveConfig"
-            class="number-input"
-          />
-          <span class="unit">条</span>
-        </div>
-        <div class="config-item">
           <label>酒馆预设</label>
           <input
             type="number"
@@ -80,7 +56,7 @@
         </div>
       </div>
       <p class="config-hint">
-        每个场景独立配置记忆条数。正文生成和酒馆预设会额外包含全部中期和长期记忆。
+        每个场景独立配置记忆条数。正文生成和酒馆预设会额外包含全部中期和长期记忆。正文优化不使用短期记忆，而是使用历史优化正文+第一步正文。
       </p>
       <div class="memory-stats">
         <span class="stat-item">
@@ -100,6 +76,43 @@
           <span class="stat-value">{{ totalMemoryCount }}</span>
         </span>
       </div>
+    </div>
+
+    <!-- 优化正文历史配置 -->
+    <div class="config-section">
+      <div class="section-header">
+        <span class="section-title">优化正文历史配置</span>
+        <button class="clear-btn" @click="clearOptimizedTextHistory">
+          <svg viewBox="0 0 24 24" width="12" height="12">
+            <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
+          清空历史
+        </button>
+      </div>
+      <div class="history-config-row">
+        <div class="config-item history-count-item">
+          <label>历史上下文层数</label>
+          <input
+            type="number"
+            v-model.number="config.optimizedTextHistoryCount"
+            min="0"
+            max="10"
+            @change="saveConfig"
+            class="number-input"
+          />
+          <span class="unit">层</span>
+        </div>
+        <div class="history-stats">
+          <span class="stat-item">
+            <span class="stat-label">当前历史:</span>
+            <span class="stat-value history-value">{{ optimizedTextHistoryCount }}</span>
+            <span class="stat-label">/10 层</span>
+          </span>
+        </div>
+      </div>
+      <p class="config-hint">
+        生成优化正文时，会将最新的 N 层历史优化正文作为上下文。Re-roll 时会替换最新层而非新增。最多保存10层历史。
+      </p>
     </div>
 
     <!-- 记忆提示词模板 -->
@@ -166,6 +179,7 @@ import {
   promptPreviewService,
   type ShortTermMemoryConfig
 } from '@/services/promptPreviewService';
+import { textOptimizationService } from '@/services/textOptimizationService';
 import { useGameStateStore } from '@/stores/gameStateStore';
 import { toast } from '@/utils/toast';
 
@@ -176,8 +190,26 @@ const config = ref<ShortTermMemoryConfig>({
   textOptimizationCount: 0,
   textOptimizationRerollCount: 0,
   tavernPresetCount: 5,
+  optimizedTextHistoryCount: 3,
   promptTemplate: '',
 });
+
+// 优化正文历史数量
+const optimizedTextHistoryCount = ref(0);
+
+// 刷新优化正文历史数量
+const refreshOptimizedTextHistoryCount = () => {
+  optimizedTextHistoryCount.value = textOptimizationService.getHistoryCount();
+};
+
+// 清空优化正文历史
+const clearOptimizedTextHistory = () => {
+  if (confirm('确定要清空优化正文历史吗？清空后无法恢复。')) {
+    textOptimizationService.clearHistory();
+    refreshOptimizedTextHistoryCount();
+    toast.success('已清空优化正文历史');
+  }
+};
 
 const previewText = ref('');
 const gameStateStore = useGameStateStore();
@@ -254,6 +286,7 @@ const refreshPreview = () => {
 
 onMounted(() => {
   loadConfig();
+  refreshOptimizedTextHistoryCount();
 });
 </script>
 
@@ -286,20 +319,20 @@ onMounted(() => {
   color: #fff;
 }
 
-.config-grid-6 {
+.config-grid-4 {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
 
 @media (max-width: 900px) {
-  .config-grid-6 {
-    grid-template-columns: repeat(3, 1fr);
+  .config-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 500px) {
-  .config-grid-6 {
+  .config-grid-4 {
     grid-template-columns: repeat(2, 1fr);
   }
 }
@@ -374,6 +407,53 @@ onMounted(() => {
 
 .stat-item.total .stat-value {
   color: #4aff9e;
+}
+
+.stat-value.history-value {
+  color: #ff9e4a;
+}
+
+.clear-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(255, 100, 100, 0.1);
+  border: 1px solid rgba(255, 100, 100, 0.2);
+  border-radius: 4px;
+  color: rgba(255, 150, 150, 0.8);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.clear-btn:hover {
+  background: rgba(255, 100, 100, 0.2);
+  border-color: rgba(255, 100, 100, 0.4);
+  color: #ff8080;
+}
+
+.history-config-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.history-count-item {
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.history-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  height: fit-content;
+  margin-bottom: 18px;
 }
 
 .reset-btn,

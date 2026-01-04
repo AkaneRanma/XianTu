@@ -1898,8 +1898,14 @@ ${saveDataJson}`;
     uiStore.startTextOptimization();
 
     try {
-      // 构建优化提示词消息
-      const messages = textOptimizationService.buildOptimizationMessages(originalText);
+      // 🔥 获取优化正文历史层数配置
+      const { promptPreviewService } = await import('@/services/promptPreviewService');
+      const memoryConfig = promptPreviewService.getMemoryConfig();
+      const historyCount = memoryConfig.optimizedTextHistoryCount || 0;
+
+      // 构建优化提示词消息（包含历史上下文，首次优化 isReroll=false）
+      const messages = textOptimizationService.buildOptimizationMessages(originalText, historyCount, false);
+      console.log('[AI双向系统] 正文优化使用历史层数:', historyCount, '当前历史总数:', textOptimizationService.getHistoryCount());
 
       // 检查正文优化API配置的流式设置
       const optimizationConfig = aiService.getTextOptimizationConfig();
@@ -1934,6 +1940,12 @@ ${saveDataJson}`;
 
       // 提取优化后的文本
       const finalText = this.extractOptimizedText(optimizedText);
+
+      // 🔥 将优化后的正文添加到历史记录
+      if (finalText && finalText.trim()) {
+        textOptimizationService.addOptimizedText(finalText);
+        console.log('[AI双向系统] 已将优化正文添加到历史，当前历史数量:', textOptimizationService.getHistoryCount());
+      }
 
       // 通知前端正文优化完成
       uiStore.completeTextOptimization(finalText);
@@ -2262,6 +2274,7 @@ ${step1Text}
   /**
    * 🔥 重新优化正文
    * 使用当前正文重新执行优化
+   * Re-roll时替换历史中最新的一层，而非新增
    */
   public async rerollTextOptimization(options?: {
     onStreamChunk?: (chunk: string) => void;
@@ -2269,8 +2282,9 @@ ${step1Text}
     const uiStore = useUIStore();
     const { aiService } = await import('@/services/aiService');
 
-    // 使用保存的正文或当前正文
-    const sourceText = uiStore.lastStep1Text || uiStore.splitStep1Text;
+    // 🔥 Re-roll时使用原始正文（未优化的Step1文本），而非已优化的文本
+    // 这确保每次Re-roll都基于同一个原始正文进行优化
+    const sourceText = uiStore.originalStep1Text || uiStore.lastStep1Text || uiStore.splitStep1Text;
 
     if (!sourceText) {
       console.warn('[AI双向系统] 无法重新优化：没有源文本');
@@ -2289,12 +2303,18 @@ ${step1Text}
       return null;
     }
 
-    console.log('[AI双向系统] 开始重新优化正文');
+    console.log('[AI双向系统] 开始重新优化正文（Re-roll模式）');
     uiStore.startRerollOptimization();
 
     try {
-      // 构建优化提示词消息
-      const messages = textOptimizationService.buildOptimizationMessages(sourceText);
+      // 🔥 获取优化正文历史层数配置
+      const { promptPreviewService } = await import('@/services/promptPreviewService');
+      const memoryConfig = promptPreviewService.getMemoryConfig();
+      const historyCount = memoryConfig.optimizedTextHistoryCount || 0;
+
+      // 🔥 构建优化提示词消息（Re-roll时 isReroll=true，排除最新层）
+      const messages = textOptimizationService.buildOptimizationMessages(sourceText, historyCount, true);
+      console.log('[AI双向系统] Re-roll正文优化使用历史层数:', historyCount, '(排除最新层)', '当前历史总数:', textOptimizationService.getHistoryCount());
 
       // 🔥 使用全局流式设置（正文优化API配置中没有单独的streaming字段）
       const useStreaming = uiStore.useStreaming;
@@ -2314,6 +2334,12 @@ ${step1Text}
 
       // 提取优化后的文本
       const finalText = this.extractOptimizedText(optimizedText);
+
+      // 🔥 替换历史中最新的一层，而非新增
+      if (finalText && finalText.trim()) {
+        textOptimizationService.replaceLatestOptimizedText(finalText);
+        console.log('[AI双向系统] 已替换历史中最新的优化正文，当前历史数量:', textOptimizationService.getHistoryCount());
+      }
 
       // 通知前端正文优化完成
       uiStore.completeRerollOptimization(finalText);
