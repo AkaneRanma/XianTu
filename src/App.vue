@@ -56,7 +56,7 @@
       <template #menu="{ close }">
         <button class="action-menu-item" @click="showSettingsModal = true; close()">
           <Settings :size="18" />
-          <span>设置66</span>
+          <span>设置42</span>
         </button>
         <button class="action-menu-item" :class="{ 'is-disabled': !backendReady }" @click="openWorkshop(close)">
           <Store :size="18" />

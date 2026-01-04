@@ -704,21 +704,24 @@ const handleRerollOptimization = async () => {
 };
 
 // 当前显示的叙述内容
-// 文本内容优先使用短期记忆最后一条，actionOptions和stateChanges从叙事历史获取
+// 🔥 文本内容优先使用叙事历史（包含优化后的正文），actionOptions和stateChanges也从叙事历史获取
+// 短期记忆现在只存储原始正文用于AI上下文，不用于UI显示
 const currentNarrative = computed(() => {
   const narrativeHistory = gameStateStore.narrativeHistory;
   const shortTermMemory = gameStateStore.memory?.短期记忆;
   const currentTimeString = formatCurrentTime();
 
-  // 优先从短期记忆获取文本内容
+  // 🔥 修复：优先从叙事历史获取文本内容（包含优化后的正文，用于UI显示）
+  // 短期记忆现在只存储原始正文，不适合用于显示
   let content = '';
-  if (shortTermMemory && shortTermMemory.length > 0) {
-    // 短期记忆使用push添加，最新的在末尾
+  if (narrativeHistory && narrativeHistory.length > 0) {
+    // 叙事历史使用push添加，最新的在末尾
+    const latestNarrative = narrativeHistory[narrativeHistory.length - 1];
+    content = latestNarrative.content?.replace(/^【.*?】\s*/, '') || ''; // 移除时间前缀
+  } else if (shortTermMemory && shortTermMemory.length > 0) {
+    // 回退到短期记忆（兼容旧版本存档，没有叙事历史的情况）
     const latestMemory = shortTermMemory[shortTermMemory.length - 1];
     content = latestMemory.replace(/^【.*?】\s*/, ''); // 移除时间前缀
-  } else if (narrativeHistory && narrativeHistory.length > 0) {
-    // 回退到叙事历史
-    content = narrativeHistory[narrativeHistory.length - 1].content.replace(/^【.*?】\s*/, '');
   }
 
   // 从叙事历史获取actionOptions和stateChanges

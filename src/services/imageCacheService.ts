@@ -393,6 +393,32 @@ class ImageCacheService {
   }
 
   /**
+   * 获取所有缓存条目
+   */
+  async getAllEntries(): Promise<ImageCacheEntry[]> {
+    const db = await this.ensureDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readonly')
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.getAll()
+
+      request.onerror = () => {
+        console.error('[ImageCache] 获取所有缓存条目失败:', request.error)
+        reject(request.error)
+      }
+
+      request.onsuccess = () => {
+        const entries = request.result as ImageCacheEntry[]
+        // 按创建时间倒序排列，最新的在前面
+        entries.sort((a, b) => b.createdAt - a.createdAt)
+        console.log(`[ImageCache] 获取到 ${entries.length} 个缓存条目`)
+        resolve(entries)
+      }
+    })
+  }
+
+  /**
    * 清空所有缓存
    */
   async clearAll(): Promise<void> {

@@ -585,6 +585,7 @@ ${step1Text}
 
         gmResponse = {
           text: finalText,
+          originalText: step1Text, // 🔥 保存原始正文，用于短期记忆
           mid_term_memory: parsedStep2.mid_term_memory || '',
           tavern_commands: parsedStep2.tavern_commands || [],
           action_options: uiStore.enableActionOptions ? (parsedStep2.action_options || []) : []
@@ -1111,8 +1112,12 @@ ${step1Text}
     if (response.text?.trim()) {
       const timePrefix = this._formatGameTime(saveData.游戏时间);
       const textContent = sanitizeAITextForDisplay(response.text).trim();
+      // 🔥 短期记忆使用原始正文（未经优化），避免文生图tags等被发送给AI
+      const memoryContent = response.originalText
+        ? sanitizeAITextForDisplay(response.originalText).trim()
+        : textContent;
 
-      // 1. 添加到叙事历史（用于UI显示）
+      // 1. 添加到叙事历史（用于UI显示，使用可能优化后的文本）
       const newNarrative = {
         type: 'gm' as const,
         role: 'assistant' as const,
@@ -1128,10 +1133,10 @@ ${step1Text}
         newValue: cloneDeep(newNarrative)
       });
 
-      // 2. 添加到短期记忆（用于AI上下文）
+      // 2. 添加到短期记忆（用于AI上下文，使用原始正文）
       if (!saveData.记忆) saveData.记忆 = { 短期记忆: [], 中期记忆: [], 长期记忆: [], 隐式中期记忆: [] };
       if (!saveData.记忆.短期记忆) saveData.记忆.短期记忆 = [];
-      saveData.记忆.短期记忆.push(`${timePrefix}${textContent}`);
+      saveData.记忆.短期记忆.push(`${timePrefix}${memoryContent}`);
     }
 
     // 处理mid_term_memory：添加到隐式中期记忆
@@ -2253,21 +2258,23 @@ ${step1Text}
       // 通知前端正文优化完成
       uiStore.completeRerollOptimization(finalText);
 
-      // 🔥 更新显示文本和短期记忆
+      // 🔥 更新显示文本和叙事历史
+      // 注意：短期记忆保持原始正文不变（用于AI上下文），只更新叙事历史（用于UI显示）
       if (finalText) {
         // 更新显示的正文文本
         uiStore.lastStep1Text = finalText;
         uiStore.splitStep1Text = finalText;
 
-        // 更新短期记忆中的最后一条
         const gameStateStore = useGameStateStore();
-        const memory = gameStateStore.memory;
-        const shortTermMemory = memory?.短期记忆;
-        if (memory && shortTermMemory && shortTermMemory.length > 0) {
-          const timePrefix = this._formatGameTime(gameStateStore.toSaveData()?.游戏时间);
-          const lastIndex = shortTermMemory.length - 1;
-          shortTermMemory[lastIndex] = `${timePrefix}${finalText}`;
-          console.log('[AI双向系统] 已更新短期记忆中的最后一条');
+        const timePrefix = this._formatGameTime(gameStateStore.toSaveData()?.游戏时间);
+
+        // 🔥 更新叙事历史中的最后一条（UI优先从这里获取内容显示）
+        // 短期记忆保持原始正文，用于AI上下文
+        const narrativeHistory = gameStateStore.narrativeHistory;
+        if (narrativeHistory && narrativeHistory.length > 0) {
+          const lastIndex = narrativeHistory.length - 1;
+          narrativeHistory[lastIndex].content = `${timePrefix}${finalText}`;
+          console.log('[AI双向系统] 已更新叙事历史中的最后一条（短期记忆保持原始正文）');
         }
       }
 

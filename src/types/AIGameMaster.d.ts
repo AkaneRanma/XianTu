@@ -187,8 +187,10 @@ export interface GM_Request {
  * AI Game Master 返回的结构化响应对象 (天道响应)。
  */
 export interface GM_Response {
-  /** AI生成的主要叙事内容，用于展示给用户。也作为短期记忆存储 */
+  /** AI生成的主要叙事内容，用于展示给用户（可能是优化后的文本） */
   text: string;
+  /** 🔥 原始正文（未经优化），用于存入短期记忆。如果未提供，则使用 text */
+  originalText?: string;
   /**
    * 一个包含所有状态变更指令的数组。
    * 前端需要解析并执行这些指令。

@@ -1,46 +1,46 @@
 <template>
   <div class="formatted-text">
     <template v-for="(part, index) in parsedText" :key="index">
+      <!-- HTML 类型 - 使用 v-html 渲染 -->
+      <span v-if="part.type === 'html'" class="text-html" v-html="sanitizeHtml(String(part.content))"></span>
+
       <!-- 普通文本类型 -->
-      <span v-if="part.type !== 'judgement-card' && part.type !== 'image-marker'" :class="getPartClass(part.type)">
+      <span v-else-if="part.type !== 'judgement-card' && part.type !== 'image-marker'" :class="getPartClass(part.type)">
         {{ part.content }}
       </span>
 
       <!-- 图像标记类型 -->
       <div v-else-if="part.type === 'image-marker' && isImageMarkerData(part.content)" class="image-marker-container">
         <!-- 已生成的图片 -->
-        <div v-if="getImageState(part.content.id)?.imageData" class="generated-image-wrapper">
+        <div v-if="getImageState(part.content.id)?.imageData" class="generated-image-wrapper-xiantu">
           <img
             :src="getImageState(part.content.id)?.imageData"
             :alt="part.content.tags"
-            class="generated-image"
-            @click="openImagePreview(getImageState(part.content.id)?.imageData || '', part.content.tags)"
+            class="generated-image-xiantu"
+            @click="handleImageClick($event, part.content)"
+            @mousedown="startLongPress($event, part.content)"
+            @mouseup="cancelLongPress"
+            @mouseleave="cancelLongPress"
+            @touchstart.passive="startLongPress($event, part.content)"
+            @touchend="cancelLongPress"
+            @touchcancel="cancelLongPress"
           />
-          <div class="image-overlay">
-            <button class="image-action-btn" @click="openImagePreview(getImageState(part.content.id)?.imageData || '', part.content.tags)" title="预览">
-              🔍
-            </button>
-            <button class="image-action-btn" @click="regenerateImage(part.content)" title="重新生成">
-              🔄
-            </button>
-          </div>
         </div>
         <!-- 生成中状态 -->
-        <div v-else-if="getImageState(part.content.id)?.loading" class="image-loading">
-          <div class="loading-spinner"></div>
+        <div v-else-if="getImageState(part.content.id)?.loading" class="image-loading-xiantu">
+          <div class="loading-spinner-xiantu"></div>
           <span>生成中...</span>
         </div>
         <!-- 生成失败状态 -->
-        <div v-else-if="getImageState(part.content.id)?.error" class="image-error">
+        <div v-else-if="getImageState(part.content.id)?.error" class="image-error-xiantu">
           <span class="error-icon">⚠️</span>
           <span class="error-text">{{ getImageState(part.content.id)?.error }}</span>
-          <button class="retry-btn" @click="generateImage(part.content)">重试</button>
+          <button class="retry-btn-xiantu" @click="generateImage(part.content)">重试</button>
         </div>
-        <!-- 待生成按钮 -->
-        <button v-else class="generate-image-btn" @click="generateImage(part.content)">
-          <span class="btn-icon">🎨</span>
-          <span class="btn-text">生成图片</span>
-          <span class="btn-tags">{{ truncateTags(part.content.tags) }}</span>
+        <!-- 待生成按钮 - 仙侠风格小按钮 -->
+        <button v-else class="generate-image-btn-xiantu" @click="generateImage(part.content)" @mousedown="startLongPress($event, part.content)" @mouseup="cancelLongPress" @mouseleave="cancelLongPress" @touchstart.passive="startLongPress($event, part.content)" @touchend="cancelLongPress" @touchcancel="cancelLongPress">
+          <span class="btn-icon-xiantu">✦</span>
+          <span class="btn-text-xiantu">生图</span>
         </button>
       </div>
 
@@ -123,26 +123,24 @@
     </template>
   </div>
 
-  <!-- 图片预览弹窗 -->
-  <Teleport to="body">
-    <div v-if="previewImage" class="image-preview-overlay" @click="closeImagePreview">
-      <div class="image-preview-modal" @click.stop>
-        <div class="preview-header">
-          <span class="preview-title">图片预览</span>
-          <button class="preview-close-btn" @click="closeImagePreview">×</button>
-        </div>
-        <div class="preview-body">
-          <img :src="previewImage" :alt="previewTags" class="preview-image" />
-        </div>
-        <div class="preview-footer">
-          <span class="preview-tags">{{ previewTags }}</span>
-          <button class="download-btn" @click="downloadImage">
-            <span>📥</span> 下载图片
-          </button>
-        </div>
-      </div>
-    </div>
-  </Teleport>
+  <!-- 新版全屏图片预览弹窗 -->
+  <ImagePreviewModal
+    :visible="showPreviewModal"
+    :image-data="previewImage || ''"
+    @close="closeImagePreview"
+    @download="onPreviewDownload"
+    @regenerate="onPreviewRegenerate"
+  />
+
+  <!-- Tag 编辑弹窗 -->
+  <TagEditModal
+    :visible="showTagEditModal"
+    :tags="editingTags"
+    :image-id="editingImageId"
+    @close="closeTagEditModal"
+    @save="saveEditedTags"
+    @save-and-regenerate="saveTagsAndRegenerate"
+  />
 
   <!-- 判定规则帮助弹窗 -->
   <Teleport to="body">
@@ -295,13 +293,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, nextTick } from 'vue'
+import { computed, ref, watch, onMounted, nextTick, onUnmounted } from 'vue'
 import { novelAIService } from '@/services/novelAIService'
 import { imageCacheService, generateCacheKey } from '@/services/imageCacheService'
 import { useNovelAIStore } from '@/stores/novelAIStore'
 import { toast } from '@/utils/toast'
+import ImagePreviewModal from './ImagePreviewModal.vue'
+import TagEditModal from './TagEditModal.vue'
 
 const showHelpModal = ref(false)
+const showPreviewModal = ref(false)
+const showTagEditModal = ref(false)
+const editingTags = ref('')
+const editingImageId = ref('')
+const editingMarker = ref<ImageMarkerData | null>(null)
+
+// 长按相关
+const longPressTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const longPressThreshold = 500 // 长按阈值 500ms
+const longPressTriggered = ref(false) // 标记长按是否真的完成触发
+
+// 保存当前预览的 marker（用于重新生成）
+const previewMarker = ref<ImageMarkerData | null>(null)
+
+// 并发生成锁 - 防止重复触发
+const pendingGenerations = ref<Set<string>>(new Set())
 
 // 获取 Pinia Store
 const novelAIStore = useNovelAIStore()
@@ -322,9 +338,34 @@ function getImageState(id: string): ImageState | null {
   return novelAIStore.getImageState(id)
 }
 
-// 生成图像
-async function generateImage(marker: ImageMarkerData) {
+// 生成图像 - 带防重复机制
+async function generateImage(marker: ImageMarkerData, forceRegenerate = false) {
   const id = marker.id
+
+  // 获取当前状态（从全局 store，跨组件实例共享）
+  const existingState = novelAIStore.getImageState(id)
+
+  // 检查是否已经在 store 中标记为加载中（跨组件实例有效）
+  // 这可以防止 UI 切换时新组件实例重复触发请求
+  if (existingState?.loading) {
+    console.log(`[NovelAI] 图片 ${id} 在 store 中已标记为加载中，跳过重复请求`)
+    return
+  }
+
+  // 检查是否已经在当前组件实例的生成队列中（本地防抖）
+  if (pendingGenerations.value.has(id)) {
+    console.log(`[NovelAI] 图片 ${id} 在本地队列中，跳过重复请求`)
+    return
+  }
+
+  // 如果不是强制重新生成，且已有完成的图片，跳过
+  if (!forceRegenerate && existingState?.imageData) {
+    console.log(`[NovelAI] 图片 ${id} 已生成，跳过`)
+    return
+  }
+
+  // 标记为正在生成
+  pendingGenerations.value.add(id)
 
   // 设置加载状态
   novelAIStore.startGeneration(id)
@@ -339,39 +380,137 @@ async function generateImage(marker: ImageMarkerData) {
     }
   } catch (e) {
     novelAIStore.completeGeneration(id, false, undefined, e instanceof Error ? e.message : '未知错误')
+  } finally {
+    // 移除生成锁
+    pendingGenerations.value.delete(id)
   }
 }
 
-// 重新生成图像
+// 重新生成图像（强制重新生成）
 function regenerateImage(marker: ImageMarkerData) {
-  generateImage(marker)
+  // 清除现有状态，强制重新生成
+  novelAIStore.clearImageState(marker.id)
+  generateImage(marker, true)
+}
+
+// 处理图片点击 - 单击打开预览
+function handleImageClick(event: MouseEvent, marker: ImageMarkerData) {
+  event.preventDefault()
+
+  // 如果长按真的触发了（打开了弹窗），忽略这次点击
+  if (longPressTriggered.value) {
+    longPressTriggered.value = false
+    editingMarker.value = null
+    return
+  }
+
+  // 清理状态
+  editingMarker.value = null
+
+  // 直接打开预览
+  const imageData = getImageState(marker.id)?.imageData
+  if (imageData) {
+    openImagePreview(imageData, marker.tags, marker)
+  }
 }
 
 // 打开图片预览
-function openImagePreview(imageData: string, tags: string) {
+function openImagePreview(imageData: string, tags: string, marker: ImageMarkerData) {
   previewImage.value = imageData
   previewTags.value = tags
+  previewMarker.value = marker
+  showPreviewModal.value = true
 }
 
 // 关闭图片预览
 function closeImagePreview() {
+  showPreviewModal.value = false
   previewImage.value = null
   previewTags.value = ''
+  previewMarker.value = null
 }
 
-// 下载图片
-function downloadImage() {
-  if (!previewImage.value) return
-
-  const link = document.createElement('a')
-  link.href = previewImage.value
-  link.download = `novelai-${Date.now()}.png`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-
+// 预览弹窗下载回调
+function onPreviewDownload() {
   toast.success('图片已下载')
 }
+
+// 预览弹窗重新生成回调
+function onPreviewRegenerate() {
+  if (previewMarker.value) {
+    regenerateImage(previewMarker.value)
+    closeImagePreview()
+    toast.success('正在重新生成图片')
+  }
+}
+
+// 长按开始
+function startLongPress(event: MouseEvent | TouchEvent, marker: ImageMarkerData) {
+  // 阻止默认行为（移动端长按可能触发上下文菜单）
+  if (event.type === 'touchstart') {
+    // 不阻止默认行为，避免影响滚动
+  }
+
+  cancelLongPress()
+  editingMarker.value = marker
+  longPressTriggered.value = false // 重置标记
+
+  longPressTimer.value = setTimeout(() => {
+    longPressTriggered.value = true // 标记长按真的触发了
+    // 触发 tag 编辑
+    openTagEditModal(marker)
+    longPressTimer.value = null
+  }, longPressThreshold)
+}
+
+// 取消长按
+function cancelLongPress() {
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+    longPressTimer.value = null
+  }
+}
+
+// 打开 tag 编辑弹窗
+function openTagEditModal(marker: ImageMarkerData) {
+  editingTags.value = marker.tags
+  editingImageId.value = marker.id
+  editingMarker.value = marker
+  showTagEditModal.value = true
+}
+
+// 关闭 tag 编辑弹窗
+function closeTagEditModal() {
+  showTagEditModal.value = false
+  editingTags.value = ''
+  editingImageId.value = ''
+  editingMarker.value = null
+}
+
+// 保存编辑后的 tags（不自动重新生成）
+function saveEditedTags(newTags: string) {
+  if (editingMarker.value) {
+    // 更新 marker 的 tags（这里只是更新内存中的数据）
+    editingMarker.value.tags = newTags
+    toast.success('标签已保存')
+  }
+  closeTagEditModal()
+}
+
+// 保存 tags 并重新生成图片
+function saveTagsAndRegenerate(newTags: string) {
+  if (editingMarker.value) {
+    editingMarker.value.tags = newTags
+    regenerateImage(editingMarker.value)
+    toast.success('标签已保存，正在重新生成图片')
+  }
+  closeTagEditModal()
+}
+
+// 组件卸载时清理
+onUnmounted(() => {
+  cancelLongPress()
+})
 
 // 截断标签显示
 function truncateTags(tags: string): string {
@@ -407,8 +546,131 @@ interface ImageMarkerData {
 }
 
 interface TextPart {
-  type: 'environment' | 'psychology' | 'dialogue' | 'judgement-card' | 'normal' | 'quote' | 'image-marker'
+  type: 'environment' | 'psychology' | 'dialogue' | 'judgement-card' | 'normal' | 'quote' | 'image-marker' | 'html'
   content: string | JudgementData | ImageMarkerData
+}
+
+// 安全 HTML 白名单配置
+const ALLOWED_HTML_TAGS = [
+  'font', 'span', 'b', 'i', 'u', 's', 'strong', 'em', 'mark', 'small', 'big',
+  'sub', 'sup', 'del', 'ins', 'code', 'kbd', 'var', 'samp', 'abbr', 'cite',
+  'ruby', 'rt', 'rp', 'bdi', 'bdo', 'wbr', 'br'
+]
+
+const ALLOWED_HTML_ATTRS = [
+  'color', 'size', 'face', 'style', 'class', 'title', 'lang', 'dir'
+]
+
+// 危险样式属性（需要过滤）
+const DANGEROUS_STYLE_PATTERNS = [
+  /expression\s*\(/gi,
+  /javascript\s*:/gi,
+  /vbscript\s*:/gi,
+  /data\s*:/gi,
+  /-moz-binding/gi,
+  /behavior\s*:/gi,
+  /url\s*\(/gi,
+]
+
+// 安全过滤 HTML 内容
+function sanitizeHtml(html: string): string {
+  // 创建临时 DOM 解析器
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html')
+  const container = doc.body.firstChild as HTMLElement
+
+  if (!container) return ''
+
+  // 递归清理节点
+  function cleanNode(node: Node): Node | null {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.cloneNode()
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return null
+    }
+
+    const element = node as HTMLElement
+    const tagName = element.tagName.toLowerCase()
+
+    // 检查标签是否在白名单中
+    if (!ALLOWED_HTML_TAGS.includes(tagName)) {
+      // 不在白名单中，只保留子节点内容
+      const fragment = document.createDocumentFragment()
+      element.childNodes.forEach(child => {
+        const cleanedChild = cleanNode(child)
+        if (cleanedChild) {
+          fragment.appendChild(cleanedChild)
+        }
+      })
+      return fragment
+    }
+
+    // 创建安全的元素
+    const cleanElement = document.createElement(tagName)
+
+    // 过滤属性
+    for (const attr of Array.from(element.attributes)) {
+      const attrName = attr.name.toLowerCase()
+
+      // 检查属性是否在白名单中
+      if (!ALLOWED_HTML_ATTRS.includes(attrName)) {
+        continue
+      }
+
+      // 事件处理器属性直接跳过
+      if (attrName.startsWith('on')) {
+        continue
+      }
+
+      const attrValue = attr.value
+
+      // 特殊处理 style 属性
+      if (attrName === 'style') {
+        // 检查是否包含危险模式
+        let isSafe = true
+        for (const pattern of DANGEROUS_STYLE_PATTERNS) {
+          if (pattern.test(attrValue)) {
+            isSafe = false
+            break
+          }
+        }
+        if (!isSafe) {
+          continue
+        }
+      }
+
+      cleanElement.setAttribute(attrName, attrValue)
+    }
+
+    // 递归处理子节点
+    element.childNodes.forEach(child => {
+      const cleanedChild = cleanNode(child)
+      if (cleanedChild) {
+        cleanElement.appendChild(cleanedChild)
+      }
+    })
+
+    return cleanElement
+  }
+
+  const cleanedContainer = document.createElement('div')
+  container.childNodes.forEach(child => {
+    const cleanedChild = cleanNode(child)
+    if (cleanedChild) {
+      cleanedContainer.appendChild(cleanedChild)
+    }
+  })
+
+  return cleanedContainer.innerHTML
+}
+
+// 检测文本中是否包含 HTML 标签
+function containsHtmlTags(text: string): boolean {
+  // 匹配常见的 HTML 标签
+  const htmlTagPattern = /<\/?(?:font|span|b|i|u|s|strong|em|mark|small|big|sub|sup|del|ins|code|kbd|var|samp|abbr|cite|ruby|rt|rp|bdi|bdo|wbr|br)\b[^>]*>/i
+  return htmlTagPattern.test(text)
 }
 
 const isJudgementData = (content: string | JudgementData | ImageMarkerData): content is JudgementData => {
@@ -434,11 +696,13 @@ const getImageMarkers = () => {
   }
 }
 
-// 生成稳定的 ID（基于内容哈希，确保相同内容始终生成相同 ID）
-const generateStableMarkerId = (tags: string, position: number) => {
-  // 使用简单的字符串哈希
+// 生成稳定的 ID（仅基于 tags 内容哈希，不依赖位置）
+// 这样在流式传输时 UI 重新渲染不会因为位置变化而生成新 ID
+const generateStableMarkerId = (tags: string, _position?: number) => {
+  // 只使用 tags 内容作为哈希，忽略位置参数
+  // 这确保同样的 tags 在任何位置都生成相同的 ID
   let hash = 0
-  const str = `${tags}_${position}`
+  const str = tags.trim().toLowerCase() // 规范化处理
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i)
     hash = ((hash << 5) - hash) + char
@@ -613,11 +877,61 @@ const parsedText = computed(() => {
       }
     }
 
+    // 🎨 HTML 标签检测 (如: <font color="steelblue">text</font>)
+    // 匹配开放标签和自闭合标签
+    const htmlTagPatterns = ALLOWED_HTML_TAGS.map(tag => {
+      // 匹配 <tag ...>...</tag> 或 <tag ... />
+      const openTagPattern = `<${tag}\\b[^>]*>`
+      const closeTagPattern = `</${tag}>`
+      return { tag, openTagPattern, closeTagPattern }
+    })
+
+    // 查找 HTML 标签
+    for (const { tag, openTagPattern, closeTagPattern } of htmlTagPatterns) {
+      const openRegex = new RegExp(openTagPattern, 'gi')
+      let match
+      let searchPos = currentIndex
+
+      while ((match = openRegex.exec(processedText)) !== null) {
+        if (match.index < searchPos) continue
+
+        const openTagStart = match.index
+        const openTagEnd = openTagStart + match[0].length
+
+        // 对于自闭合标签如 <br /> 或 <wbr>
+        if (match[0].endsWith('/>') || ['br', 'wbr'].includes(tag)) {
+          markers.push({
+            start: openTagStart,
+            end: openTagEnd,
+            type: 'html' as const,
+            contentStart: openTagStart,
+            contentEnd: openTagEnd
+          })
+          continue
+        }
+
+        // 查找对应的闭合标签
+        const closeRegex = new RegExp(closeTagPattern, 'gi')
+        closeRegex.lastIndex = openTagEnd
+        const closeMatch = closeRegex.exec(processedText)
+
+        if (closeMatch) {
+          markers.push({
+            start: openTagStart,
+            end: closeMatch.index + closeMatch[0].length,
+            type: 'html' as const,
+            contentStart: openTagStart,
+            contentEnd: closeMatch.index + closeMatch[0].length
+          })
+        }
+      }
+    }
+
     // 🎨 图像标记 (如: image###tags###)
     if (imageEnabled && startMarker && endMarker) {
-      let searchPos = currentIndex
-      while (searchPos < processedText.length) {
-        const imgStart = processedText.indexOf(startMarker, searchPos)
+      let imgSearchPos = currentIndex
+      while (imgSearchPos < processedText.length) {
+        const imgStart = processedText.indexOf(startMarker, imgSearchPos)
         if (imgStart === -1) break
 
         const imgEnd = processedText.indexOf(endMarker, imgStart + startMarker.length)
@@ -631,7 +945,7 @@ const parsedText = computed(() => {
           contentEnd: imgEnd
         })
 
-        searchPos = imgEnd + endMarker.length
+        imgSearchPos = imgEnd + endMarker.length
       }
     }
 
@@ -761,6 +1075,12 @@ const parsedText = computed(() => {
           // 解析失败，作为普通文本处理
           parts.push({ type: 'normal', content: `〖${markedContent}〗` })
         }
+      } else if (nextMarker.type === 'html') {
+        // HTML 标签内容直接保留
+        parts.push({
+          type: 'html',
+          content: markedContent
+        })
       } else if (nextMarker.type === 'image') {
         // 解析图像标记
         const tags = processedText.slice(nextMarker.contentStart, nextMarker.contentEnd).trim()
@@ -787,10 +1107,12 @@ const parsedText = computed(() => {
 
           // 如果开启自动生成，则自动触发生成
           const { autoGenerate } = getImageMarkers()
-          if (autoGenerate && !novelAIStore.getImageState(imageMarker.id)) {
+          if (autoGenerate) {
             // 使用 nextTick 避免在 computed 中直接修改响应式状态
             nextTick(() => {
-              if (!novelAIStore.getImageState(imageMarker.id)) {
+              const existingState = novelAIStore.getImageState(imageMarker.id)
+              // 只有在没有状态、没有已生成的图片、没有正在加载、且没有在 pending 队列中时才触发生成
+              if (!existingState?.imageData && !existingState?.loading && !pendingGenerations.value.has(imageMarker.id)) {
                 generateImage(imageMarker)
               }
             })
@@ -816,7 +1138,8 @@ const getPartClass = (type: string) => {
     'text-psychology': type === 'psychology',
     'text-dialogue': type === 'dialogue',
     'text-quote': type === 'quote',
-    'text-normal': type === 'normal'
+    'text-normal': type === 'normal',
+    'text-html': type === 'html'
   }
 }
 
@@ -896,6 +1219,16 @@ const parseDetailSource = (detail: string) => {
 /* 普通文本 */
 .text-normal {
   color: var(--color-text, #1a1a1a);
+}
+
+/* HTML 渲染内容 */
+.text-html {
+  /* 继承父级样式 */
+}
+
+.text-html :deep(font),
+.text-html :deep(span) {
+  /* 允许 HTML 标签的样式生效 */
 }
 
 /* 判定卡片样式 - 重新设计 */
@@ -1665,7 +1998,7 @@ const parseDetailSource = (detail: string) => {
   color: #64748b;
 }
 
-/* ========== 图像标记样式 ========== */
+/* ========== 仙侠风格图像标记样式 ========== */
 
 .image-marker-container {
   display: block;
@@ -1673,345 +2006,280 @@ const parseDetailSource = (detail: string) => {
   text-indent: 0;
 }
 
-/* 生成图片按钮 */
-.generate-image-btn {
-  display: flex;
+/* 仙侠风格生成按钮 - 小巧精致 - 使用伪元素实现渐变边框 */
+.generate-image-btn-xiantu {
+  display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.875rem 1.25rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(15, 23, 42, 0.6);
   border: none;
-  border-radius: 12px;
-  color: white;
+  border-radius: 16px;
+  color: #a78bfa;
+  font-size: 0.8rem;
+  font-family: var(--font-family-serif, 'SimSun', serif);
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-  max-width: 100%;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+  position: relative;
+  overflow: visible;
+  isolation: isolate;
 }
 
-.generate-image-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+/* 渐变边框 - 外层 */
+.generate-image-btn-xiantu::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.7), rgba(167, 139, 250, 0.5), rgba(118, 75, 162, 0.7));
+  border-radius: 17px;
+  z-index: -2;
+  transition: all 0.3s ease;
 }
 
-.generate-image-btn:active {
+/* 内层背景 */
+.generate-image-btn-xiantu::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  background: rgba(15, 23, 42, 0.85);
+  border-radius: 15px;
+  z-index: -1;
+  transition: all 0.3s ease;
+}
+
+.generate-image-btn-xiantu:hover {
+  color: #c4b5fd;
+  transform: translateY(-1px);
+  box-shadow:
+    0 4px 12px rgba(102, 126, 234, 0.35),
+    0 0 15px rgba(167, 139, 250, 0.2);
+}
+
+.generate-image-btn-xiantu:hover::before {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.9), rgba(167, 139, 250, 0.7), rgba(118, 75, 162, 0.9));
+}
+
+.generate-image-btn-xiantu:hover::after {
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.generate-image-btn-xiantu:active {
   transform: translateY(0);
 }
 
-.generate-image-btn .btn-icon {
-  font-size: 1.25rem;
+.btn-icon-xiantu {
+  font-size: 0.9rem;
+  color: #667eea;
+  animation: twinkle 2s ease-in-out infinite;
 }
 
-.generate-image-btn .btn-text {
-  font-weight: 600;
-  font-size: 0.95rem;
+@keyframes twinkle {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
 }
 
-.generate-image-btn .btn-tags {
+.btn-text-xiantu {
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+/* 仙侠风格加载状态 */
+.image-loading-xiantu {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.05));
+  border-radius: 12px;
+  border: 1px dashed rgba(102, 126, 234, 0.4);
+  color: #a78bfa;
+  font-size: 0.85rem;
+  font-family: var(--font-family-serif, 'SimSun', serif);
+}
+
+.loading-spinner-xiantu {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(102, 126, 234, 0.2);
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin-xiantu 1s linear infinite;
+}
+
+@keyframes spin-xiantu {
+  to { transform: rotate(360deg); }
+}
+
+/* 仙侠风格错误状态 */
+.image-error-xiantu {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.03));
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.image-error-xiantu .error-icon {
+  font-size: 1rem;
+}
+
+.image-error-xiantu .error-text {
+  flex: 1;
+  color: #f87171;
   font-size: 0.8rem;
-  opacity: 0.85;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 加载状态 */
-.image-loading {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
-  border-radius: 12px;
-  border: 2px dashed #94a3b8;
-  color: #64748b;
-  font-size: 0.95rem;
-}
-
-.loading-spinner {
-  width: 24px;
-  height: 24px;
-  border: 3px solid #e2e8f0;
-  border-top-color: #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* 错误状态 */
-.image-error {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
-  border-radius: 12px;
-  border: 1px solid #fca5a5;
-}
-
-.image-error .error-icon {
-  font-size: 1.25rem;
-}
-
-.image-error .error-text {
-  flex: 1;
-  color: #b91c1c;
-  font-size: 0.9rem;
-}
-
-.image-error .retry-btn {
-  padding: 0.5rem 1rem;
-  background: #ef4444;
+.retry-btn-xiantu {
+  padding: 0.3rem 0.6rem;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   color: white;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
-.image-error .retry-btn:hover {
-  background: #dc2626;
+.retry-btn-xiantu:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
 }
 
-/* 已生成图片 */
-.generated-image-wrapper {
+/* 仙侠风格已生成图片 - 无悬停按钮 */
+.generated-image-wrapper-xiantu {
   position: relative;
   display: inline-block;
   max-width: 100%;
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.12),
+    0 0 30px rgba(102, 126, 234, 0.08);
+  transition: all 0.3s ease;
 }
 
-.generated-image {
+.generated-image-wrapper-xiantu:hover {
+  box-shadow:
+    0 6px 25px rgba(0, 0, 0, 0.18),
+    0 0 40px rgba(102, 126, 234, 0.15);
+}
+
+.generated-image-xiantu {
   display: block;
   max-width: 100%;
   max-height: 400px;
   object-fit: contain;
   cursor: pointer;
   transition: transform 0.3s ease;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.generated-image:hover {
-  transform: scale(1.02);
+.generated-image-xiantu:hover {
+  transform: scale(1.01);
 }
 
-.image-overlay {
+/* 提示文字（可选，用于提示用户交互） */
+.generated-image-wrapper-xiantu::after {
+  content: '单击预览 · 长按编辑标签';
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  display: flex;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  padding: 0.4rem;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.6));
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.7rem;
+  text-align: center;
   opacity: 0;
   transition: opacity 0.3s ease;
+  pointer-events: none;
 }
 
-.generated-image-wrapper:hover .image-overlay {
+.generated-image-wrapper-xiantu:hover::after {
   opacity: 1;
 }
 
-.image-action-btn {
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.9);
-  border: none;
-  border-radius: 50%;
-  font-size: 1.1rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
+/* ========== 深色主题适配 - 仙侠图像相关 ========== */
+
+[data-theme="dark"] .generate-image-btn-xiantu {
+  color: #c4b5fd;
+  background: rgba(15, 23, 42, 0.7);
 }
 
-.image-action-btn:hover {
-  background: white;
-  transform: scale(1.1);
+[data-theme="dark"] .generate-image-btn-xiantu::before {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.6), rgba(167, 139, 250, 0.4), rgba(118, 75, 162, 0.6));
 }
 
-/* ========== 图片预览弹窗 ========== */
-
-.image-preview-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10001;
-  animation: fadeIn 0.2s ease;
+[data-theme="dark"] .generate-image-btn-xiantu::after {
+  background: rgba(15, 23, 42, 0.9);
 }
 
-.image-preview-modal {
-  display: flex;
-  flex-direction: column;
-  max-width: 90vw;
-  max-height: 90vh;
-  background: rgba(15, 23, 42, 0.95);
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  overflow: hidden;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
-  animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+[data-theme="dark"] .generate-image-btn-xiantu:hover {
+  color: #e9d5ff;
 }
 
-.preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+[data-theme="dark"] .generate-image-btn-xiantu:hover::before {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.8), rgba(167, 139, 250, 0.6), rgba(118, 75, 162, 0.8));
 }
 
-.preview-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #e2e8f0;
+[data-theme="dark"] .image-loading-xiantu {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.08));
+  border-color: rgba(102, 126, 234, 0.3);
 }
 
-.preview-close-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  color: #94a3b8;
-  font-size: 1.25rem;
-  cursor: pointer;
-  transition: all 0.2s;
+[data-theme="dark"] .image-error-xiantu {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(239, 68, 68, 0.06));
 }
 
-.preview-close-btn:hover {
-  background: rgba(239, 68, 68, 0.2);
-  border-color: #ef4444;
-  color: #ef4444;
-}
-
-.preview-body {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  overflow: auto;
-}
-
-.preview-image {
-  max-width: 100%;
-  max-height: 70vh;
-  object-fit: contain;
-  border-radius: 8px;
-}
-
-.preview-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.25rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.preview-tags {
-  flex: 1;
-  font-size: 0.85rem;
-  color: #94a3b8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.download-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1.25rem;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.download-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
-}
-
-/* ========== 深色主题适配 - 图像相关 ========== */
-
-[data-theme="dark"] .image-loading {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.05) 100%);
-  border-color: #475569;
-  color: #94a3b8;
-}
-
-[data-theme="dark"] .loading-spinner {
-  border-color: #475569;
-  border-top-color: #667eea;
-}
-
-[data-theme="dark"] .image-error {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
-  border-color: rgba(239, 68, 68, 0.3);
-}
-
-[data-theme="dark"] .image-error .error-text {
+[data-theme="dark"] .image-error-xiantu .error-text {
   color: #fca5a5;
+}
+
+/* 亮色主题适配 */
+[data-theme="light"] .generate-image-btn-xiantu {
+  color: #7c3aed;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+[data-theme="light"] .generate-image-btn-xiantu::before {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.8), rgba(167, 139, 250, 0.6), rgba(118, 75, 162, 0.8));
+}
+
+[data-theme="light"] .generate-image-btn-xiantu::after {
+  background: rgba(248, 250, 252, 0.95);
+}
+
+[data-theme="light"] .btn-icon-xiantu {
+  color: #6366f1;
+}
+
+[data-theme="light"] .image-loading-xiantu {
+  color: #7c3aed;
 }
 
 /* 响应式适配 */
 @media (max-width: 640px) {
-  .generate-image-btn {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
+  .generate-image-btn-xiantu {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
   }
 
-  .generate-image-btn .btn-tags {
-    max-width: 100%;
+  .generated-image-xiantu {
+    max-height: 280px;
   }
 
-  .generated-image {
-    max-height: 300px;
-  }
-
-  .image-preview-modal {
-    max-width: 95vw;
-    max-height: 95vh;
-  }
-
-  .preview-image {
-    max-height: 60vh;
-  }
-
-  .preview-footer {
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .preview-tags {
-    text-align: center;
+  .generated-image-wrapper-xiantu::after {
+    font-size: 0.6rem;
+    padding: 0.3rem;
   }
 }
 </style>

@@ -291,6 +291,20 @@
             </div>
           </div>
 
+          <!-- 文生图缓存管理 -->
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-name">🖼️ {{ t('图片缓存管理') }}</label>
+              <span class="setting-desc">{{ t('查看、管理和清理AI生成的图片缓存') }}</span>
+            </div>
+            <div class="setting-control">
+              <button class="utility-btn xiantu-btn" @click="showImageCacheViewer = true">
+                <span class="xiantu-icon">✦</span>
+                {{ t('查看缓存') }}
+              </button>
+            </div>
+          </div>
+
           <!-- 通用AI设置 -->
           <div class="setting-item">
             <div class="setting-info">
@@ -441,6 +455,12 @@
             @close="showTextOptimizationModal = false"
           />
 
+          <!-- 图片缓存查看器弹窗 -->
+          <ImageCacheViewer
+            :visible="showImageCacheViewer"
+            @close="showImageCacheViewer = false"
+          />
+
           <div class="setting-item">
             <div class="setting-info">
               <label class="setting-name">{{ t('提示词管理') }}</label>
@@ -505,9 +525,11 @@ import { toast } from '@/utils/toast';
 import { debug } from '@/utils/debug';
 import { useI18n } from '@/i18n';
 import { aiService } from '@/services/aiService';
+import { novelAIService } from '@/services/novelAIService';
 import TextReplaceRulesModal from '@/components/common/TextReplaceRulesModal.vue';
 import APIConfigModal from '@/components/common/APIConfigModal.vue';
 import TextOptimizationModal from '@/components/common/TextOptimizationModal.vue';
+import ImageCacheViewer from '@/components/common/ImageCacheViewer.vue';
 import type { TextReplaceRule } from '@/types/textRules';
 import { useCharacterStore } from '@/stores/characterStore';
 import { useGameStateStore } from '@/stores/gameStateStore';
@@ -882,6 +904,7 @@ const hasUnsavedChanges = ref(false);
 const showReplaceRulesModal = ref(false);
 const showAPIConfigModal = ref(false);
 const showTextOptimizationModal = ref(false);
+const showImageCacheViewer = ref(false);
 
 const enabledReplaceRulesCount = computed(() => {
   const rules = (settings as any).replaceRules as TextReplaceRule[] | undefined;
@@ -891,7 +914,8 @@ const enabledReplaceRulesCount = computed(() => {
 
 const handleSaveReplaceRules = (rules: TextReplaceRule[]) => {
   (settings as any).replaceRules = rules;
-  onSettingChange();
+  // 🔥 修复：自动保存到 localStorage，无需用户手动点击保存按钮
+  saveSettings();
 };
 
 // 监听所有设置变化
@@ -1216,13 +1240,35 @@ const exportSettings = () => {
   debug.log('设置面板', '开始导出设置');
 
   try {
+    // 获取完整的AI服务配置
+    const fullAiConfig = aiService.getConfig();
+
+    // 获取NovelAI配置和预设
+    const novelAIConfig = novelAIService.getConfig();
+    const novelAIPresets = novelAIService.getPresets();
+
     const exportData = {
+      // 基本设置（已包含 replaceRules 正则规则）
       settings: settings,
+
+      // API配置（正文生成、变量生成、正文优化）
+      aiConfig: fullAiConfig,
+
+      // NovelAI图像生成配置
+      novelAIConfig: novelAIConfig,
+
+      // NovelAI提示词预设
+      novelAIPresets: novelAIPresets,
+
+      // 导出元信息
       exportInfo: {
         timestamp: new Date().toISOString(),
-        version: '3.7.4',
+        version: '3.7.5',
         userAgent: navigator.userAgent,
-        gameVersion: '仙途 v3.7.4'
+        gameVersion: '仙途 v3.7.5',
+        includesApiConfig: true,
+        includesNovelAI: true,
+        includesReplaceRules: true
       }
     };
 
@@ -1240,8 +1286,8 @@ const exportSettings = () => {
 
     URL.revokeObjectURL(link.href);
 
-    debug.log('设置面板', '设置导出成功');
-    toast.success('设置已导出');
+    debug.log('设置面板', '设置导出成功（包含API配置、NovelAI配置、正则规则）');
+    toast.success('设置已导出（含API配置和正则规则）');
 
   } catch (error) {
     debug.error('设置面板', '导出设置失败', error);
@@ -1265,18 +1311,56 @@ const importSettings = () => {
       const text = await file.text();
       const importData = JSON.parse(text);
 
+      const importedItems: string[] = [];
+
+      // 1. 导入基本设置（包含 replaceRules 正则规则）
       if (importData.settings) {
-        // 验证导入的设置
         const validatedSettings = { ...settings, ...importData.settings };
         Object.assign(settings, validatedSettings);
+        importedItems.push('基本设置');
 
-        await saveSettings();
+        // 检查是否包含正则规则
+        if (importData.settings.replaceRules && Array.isArray(importData.settings.replaceRules)) {
+          importedItems.push(`正则规则(${importData.settings.replaceRules.length}条)`);
+        }
+      }
 
-        debug.log('设置面板', '设置导入成功', importData);
-        toast.success('设置导入成功并已应用');
-      } else {
+      // 2. 导入AI API配置
+      if (importData.aiConfig) {
+        aiService.saveConfig(importData.aiConfig);
+        // 同步到本地reactive对象
+        Object.assign(aiConfig, importData.aiConfig);
+        importedItems.push('API配置');
+        debug.log('设置面板', 'AI配置已导入', importData.aiConfig);
+      }
+
+      // 3. 导入NovelAI配置
+      if (importData.novelAIConfig) {
+        novelAIService.saveConfig(importData.novelAIConfig);
+        importedItems.push('NovelAI配置');
+        debug.log('设置面板', 'NovelAI配置已导入', importData.novelAIConfig);
+      }
+
+      // 4. 导入NovelAI预设
+      if (importData.novelAIPresets && Array.isArray(importData.novelAIPresets)) {
+        for (const preset of importData.novelAIPresets) {
+          if (preset.name) {
+            novelAIService.savePreset(preset);
+          }
+        }
+        importedItems.push(`NovelAI预设(${importData.novelAIPresets.length}个)`);
+        debug.log('设置面板', `NovelAI预设已导入: ${importData.novelAIPresets.length}个`);
+      }
+
+      // 如果没有任何有效数据
+      if (importedItems.length === 0) {
         throw new Error('无效的设置文件格式');
       }
+
+      await saveSettings();
+
+      debug.log('设置面板', '设置导入成功', { importedItems, importData });
+      toast.success(`导入成功: ${importedItems.join('、')}`);
     } catch (error) {
       debug.error('设置面板', '导入设置失败', error);
       toast.error('导入设置失败，请检查文件格式');
@@ -1795,6 +1879,42 @@ input:checked + .switch-slider:before {
 .utility-btn.primary:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+/* 仙侠风格按钮 */
+.utility-btn.xiantu-btn {
+  background: transparent;
+  border: 1px solid rgba(102, 126, 234, 0.4);
+  color: #667eea;
+  transition: all 0.3s ease;
+}
+
+.utility-btn.xiantu-btn:hover {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.08));
+  border-color: rgba(102, 126, 234, 0.6);
+  color: #764ba2;
+  box-shadow: 0 0 15px rgba(102, 126, 234, 0.2);
+}
+
+.xiantu-icon {
+  font-size: 0.9rem;
+  animation: twinkle 2s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+[data-theme='dark'] .utility-btn.xiantu-btn {
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.4);
+}
+
+[data-theme='dark'] .utility-btn.xiantu-btn:hover {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.12));
+  border-color: rgba(167, 139, 250, 0.6);
+  color: #c4b5fd;
 }
 
 [data-theme='dark'] .form-input-inline {
