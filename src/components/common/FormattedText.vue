@@ -374,7 +374,11 @@ async function generateImage(marker: ImageMarkerData, forceRegenerate = false) {
   novelAIStore.startGeneration(id)
 
   try {
-    const result = await novelAIService.generateImage({ tags: marker.tags })
+    // 传递 markerId 用于缓存存储时建立关联
+    const result = await novelAIService.generateImage({
+      tags: marker.tags,
+      markerId: marker.id
+    })
 
     if (result.success && result.imageBase64) {
       novelAIStore.completeGeneration(id, true, result.imageBase64)
@@ -748,29 +752,54 @@ async function tryRestoreFromCache(marker: ImageMarkerData) {
   if (novelAIStore.getImageState(id)) return
 
   try {
+    // 方案 A：优先使用 markerId 查找（最可靠）
+    let cached = await imageCacheService.getByMarkerId(id)
+
+    if (cached) {
+      novelAIStore.setImageState(id, {
+        loading: false,
+        imageData: cached.imageBase64,
+        error: null
+      })
+      console.log(`[NovelAI] 从缓存恢复图片 (markerId): ${id}`)
+      return
+    }
+
+    // 方案 A 备选：使用 tags 查找（用于旧缓存条目）
+    cached = await imageCacheService.getByTags(marker.tags)
+
+    if (cached) {
+      novelAIStore.setImageState(id, {
+        loading: false,
+        imageData: cached.imageBase64,
+        error: null
+      })
+      console.log(`[NovelAI] 从缓存恢复图片 (tags): ${id}`)
+      return
+    }
+
+    // 方案 A 最后备选：使用精确缓存键匹配（仅当 seed 非 0 时有效）
     const config = novelAIService.getConfig()
     const preset = config.currentPreset ? novelAIService.getPreset(config.currentPreset) : null
 
-    // 构建缓存键参数
-    const cacheParams = {
-      tags: marker.tags,
-      presetName: preset?.name || '',
-      fixedPrompt: preset?.fixedPrompt || '',
-      fixedPrompt_end: preset?.fixedPrompt_end || '',
-      negativePrompt: preset?.negativePrompt || '',
-      model: config.model,
-      sampler: config.sampler,
-      width: config.width,
-      height: config.height,
-      steps: config.steps,
-      cfg: config.promptGuidance,
-      seed: config.seed // seed 为 0 时每次生成不同，无法匹配缓存
-    }
-
-    // 只有非随机 seed 时才尝试从缓存恢复
     if (config.seed !== 0) {
+      const cacheParams = {
+        tags: marker.tags,
+        presetName: preset?.name || '',
+        fixedPrompt: preset?.fixedPrompt || '',
+        fixedPrompt_end: preset?.fixedPrompt_end || '',
+        negativePrompt: preset?.negativePrompt || '',
+        model: config.model,
+        sampler: config.sampler,
+        width: config.width,
+        height: config.height,
+        steps: config.steps,
+        cfg: config.promptGuidance,
+        seed: config.seed
+      }
+
       const cacheKey = await generateCacheKey(cacheParams)
-      const cached = await imageCacheService.get(cacheKey)
+      cached = await imageCacheService.get(cacheKey)
 
       if (cached) {
         novelAIStore.setImageState(id, {
@@ -778,13 +807,13 @@ async function tryRestoreFromCache(marker: ImageMarkerData) {
           imageData: cached.imageBase64,
           error: null
         })
-        console.log(`[NovelAI] 从缓存恢复图片: ${id}`)
+        console.log(`[NovelAI] 从缓存恢复图片 (cacheKey): ${id}`)
         return
       }
     }
 
-    // 没有缓存，尝试用最近的任意匹配
-    // 这里可以扩展为更智能的匹配逻辑
+    // 没有找到任何缓存
+    console.log(`[NovelAI] 未找到缓存: ${id}`)
   } catch (e) {
     console.warn('[NovelAI] 缓存恢复失败:', e)
   }

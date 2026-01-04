@@ -141,6 +141,8 @@ export interface NovelAIGenerateRequest {
   positivePrompt?: string
   /** 自定义负面提示词（可选，覆盖预设） */
   negativePrompt?: string
+  /** 标记ID（用于缓存恢复，可选） */
+  markerId?: string
 }
 
 // ============ 图像生成响应 ============
@@ -189,6 +191,8 @@ export interface ImageCacheEntry {
   lastAccessedAt: number
   /** 图片大小 (bytes) */
   size: number
+  /** 标记ID（用于通过 markerId 快速查找） */
+  markerId?: string
 }
 
 // ============ 缓存统计信息 ============

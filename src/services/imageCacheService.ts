@@ -7,7 +7,7 @@ import type { ImageCacheEntry, ImageCacheStats, CacheKeyParams } from '@/types/n
 
 // ============ 常量定义 ============
 const DB_NAME = 'NovelAIImageCache'
-const DB_VERSION = 1
+const DB_VERSION = 2  // 升级版本以添加 markerId 索引
 const STORE_NAME = 'images'
 
 // 缓存限制
@@ -81,8 +81,9 @@ class ImageCacheService {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result
+        const oldVersion = event.oldVersion
 
-        // 创建对象存储
+        // 创建对象存储（新建数据库时）
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' })
 
@@ -90,8 +91,24 @@ class ImageCacheService {
           store.createIndex('createdAt', 'createdAt', { unique: false })
           store.createIndex('lastAccessedAt', 'lastAccessedAt', { unique: false })
           store.createIndex('size', 'size', { unique: false })
+          store.createIndex('markerId', 'markerId', { unique: false })
+          store.createIndex('tags', 'tags', { unique: false })
 
           console.log('[ImageCache] 数据库结构已创建')
+        } else if (oldVersion < 2) {
+          // 升级到版本 2：添加 markerId 和 tags 索引
+          const transaction = (event.target as IDBOpenDBRequest).transaction
+          if (transaction) {
+            const store = transaction.objectStore(STORE_NAME)
+            if (!store.indexNames.contains('markerId')) {
+              store.createIndex('markerId', 'markerId', { unique: false })
+              console.log('[ImageCache] 已添加 markerId 索引')
+            }
+            if (!store.indexNames.contains('tags')) {
+              store.createIndex('tags', 'tags', { unique: false })
+              console.log('[ImageCache] 已添加 tags 索引')
+            }
+          }
         }
       }
     })
@@ -108,6 +125,139 @@ class ImageCacheService {
       throw new Error('[ImageCache] 数据库未初始化')
     }
     return this.db
+  }
+
+  /**
+   * 通过 markerId 查找缓存（用于随机 seed 场景）
+   */
+  async getByMarkerId(markerId: string): Promise<ImageCacheEntry | null> {
+    const db = await this.ensureDB()
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite')
+      const store = transaction.objectStore(STORE_NAME)
+
+      // 尝试使用索引查找
+      if (store.indexNames.contains('markerId')) {
+        const index = store.index('markerId')
+        const request = index.get(markerId)
+
+        request.onerror = () => {
+          console.error('[ImageCache] 通过 markerId 获取缓存失败:', request.error)
+          reject(request.error)
+        }
+
+        request.onsuccess = () => {
+          const entry = request.result as ImageCacheEntry | undefined
+
+          if (entry) {
+            // 检查是否过期
+            const expiryTime = EXPIRY_DAYS * 24 * 60 * 60 * 1000
+            if (Date.now() - entry.createdAt > expiryTime) {
+              store.delete(entry.id)
+              console.log('[ImageCache] 缓存已过期 (markerId):', markerId)
+              resolve(null)
+              return
+            }
+
+            // 更新最后访问时间
+            entry.lastAccessedAt = Date.now()
+            store.put(entry)
+
+            console.log('[ImageCache] 通过 markerId 缓存命中:', markerId)
+            resolve(entry)
+          } else {
+            resolve(null)
+          }
+        }
+      } else {
+        // 索引不存在，遍历查找
+        const request = store.getAll()
+
+        request.onerror = () => {
+          console.error('[ImageCache] 遍历查找缓存失败:', request.error)
+          reject(request.error)
+        }
+
+        request.onsuccess = () => {
+          const entries = request.result as ImageCacheEntry[]
+          const entry = entries.find(e => e.markerId === markerId)
+
+          if (entry) {
+            // 检查是否过期
+            const expiryTime = EXPIRY_DAYS * 24 * 60 * 60 * 1000
+            if (Date.now() - entry.createdAt > expiryTime) {
+              store.delete(entry.id)
+              console.log('[ImageCache] 缓存已过期 (markerId):', markerId)
+              resolve(null)
+              return
+            }
+
+            // 更新最后访问时间
+            entry.lastAccessedAt = Date.now()
+            store.put(entry)
+
+            console.log('[ImageCache] 通过 markerId 遍历查找命中:', markerId)
+            resolve(entry)
+          } else {
+            resolve(null)
+          }
+        }
+      }
+    })
+  }
+
+  /**
+   * 通过 tags 模糊查找最近的缓存（用于随机 seed 场景的备用方案）
+   */
+  async getByTags(tags: string): Promise<ImageCacheEntry | null> {
+    const db = await this.ensureDB()
+    const normalizedTags = tags.trim().toLowerCase()
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite')
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.getAll()
+
+      request.onerror = () => {
+        console.error('[ImageCache] 通过 tags 获取缓存失败:', request.error)
+        reject(request.error)
+      }
+
+      request.onsuccess = () => {
+        const entries = request.result as ImageCacheEntry[]
+
+        // 找到匹配 tags 的条目（精确匹配，忽略大小写和首尾空格）
+        const matchingEntries = entries.filter(e =>
+          e.tags.trim().toLowerCase() === normalizedTags
+        )
+
+        if (matchingEntries.length === 0) {
+          resolve(null)
+          return
+        }
+
+        // 返回最新的缓存条目
+        matchingEntries.sort((a, b) => b.createdAt - a.createdAt)
+        const entry = matchingEntries[0]
+
+        // 检查是否过期
+        const expiryTime = EXPIRY_DAYS * 24 * 60 * 60 * 1000
+        if (Date.now() - entry.createdAt > expiryTime) {
+          store.delete(entry.id)
+          console.log('[ImageCache] 缓存已过期 (tags):', tags.substring(0, 30))
+          resolve(null)
+          return
+        }
+
+        // 更新最后访问时间
+        entry.lastAccessedAt = Date.now()
+        store.put(entry)
+
+        console.log('[ImageCache] 通过 tags 缓存命中:', tags.substring(0, 30))
+        resolve(entry)
+      }
+    })
   }
 
   /**

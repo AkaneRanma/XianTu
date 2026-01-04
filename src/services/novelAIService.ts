@@ -311,7 +311,9 @@ class NovelAIService {
           seed: actualSeed,
           createdAt: Date.now(),
           lastAccessedAt: Date.now(),
-          size: imageBase64.length
+          size: imageBase64.length,
+          // 添加 markerId 用于按标记ID快速查找
+          markerId: request.markerId
         })
       }
 
