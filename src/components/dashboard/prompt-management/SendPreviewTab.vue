@@ -3,8 +3,30 @@
     <!-- 场景选择器 -->
     <ScenarioSelector v-model="selectedScenario" />
 
-    <!-- 记忆配置 -->
-    <div class="memory-config">
+    <!-- 酒馆预设激活提示（仅在正文生成场景显示） -->
+    <div v-if="hasTavernPreset && isTextGenerationScenario" class="tavern-preset-active-notice">
+      <div class="notice-header">
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+        </svg>
+        <span class="notice-title">酒馆预设已激活</span>
+      </div>
+      <div class="notice-content">
+        <p>当前激活的预设: <strong>{{ activePresetName }}</strong></p>
+        <p class="notice-hint">
+          💡 酒馆预设模式下，正文生成将使用预设中的提示词配置，网页端的正文生成预览已自动停用。
+        </p>
+        <p class="notice-hint">
+          如需使用网页端提示词，请前往「酒馆预设管理」停用当前预设。
+        </p>
+      </div>
+    </div>
+
+    <!-- 正常模式下的内容（非正文生成场景，或没有激活酒馆预设时显示） -->
+    <template v-if="!hasTavernPreset || !isTextGenerationScenario">
+
+      <!-- 记忆配置 -->
+      <div class="memory-config">
       <div class="config-row">
         <label class="config-label">短期记忆条数</label>
         <div class="config-input">
@@ -100,18 +122,44 @@
           消息序列 ({{ displayMessages.length }})
           <span v-if="showSeparatedView" class="view-badge">分离视图</span>
         </span>
-        <span class="messages-hint">按发送顺序排列</span>
+        <span class="messages-hint">按发送顺序排列，可拖拽调整</span>
       </div>
-      <div class="messages-list">
+      <div
+        ref="messagesListRef"
+        class="messages-list"
+        @dragover="handleListDragOver"
+        @dragleave="handleListDragLeave"
+      >
         <MessagePreviewCard
-          v-for="message in displayMessages"
+          v-for="(message, index) in sortedMessages"
           :key="message.id"
           :message="message"
+          :index="index"
+          :draggable="true"
+          :class="{ 'drag-over': dragOverIndex === index }"
           @copy="handleCopy"
+          @drag-start="handleDragStart"
+          @drag-over="handleDragOver"
+          @drag-leave="handleDragLeave"
+          @drop="handleDrop"
         />
-        <div v-if="displayMessages.length === 0" class="empty-state">
+        <div v-if="sortedMessages.length === 0" class="empty-state">
           暂无消息，请点击刷新预览
         </div>
+      </div>
+
+      <!-- 排序状态提示 -->
+      <div v-if="isCustomOrder" class="order-notice">
+        <svg viewBox="0 0 24 24" width="14" height="14">
+          <path fill="currentColor" d="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z"/>
+        </svg>
+        <span>已自定义排序</span>
+        <button class="reset-order-btn" @click="resetOrder">
+          <svg viewBox="0 0 24 24" width="12" height="12">
+            <path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+          </svg>
+          重置顺序
+        </button>
       </div>
       <!-- 回顶按钮 -->
       <button
@@ -126,11 +174,12 @@
       </button>
     </div>
 
-    <!-- 加载状态 -->
-    <div class="loading-state" v-if="isLoading">
-      <div class="loading-spinner"></div>
-      <span>生成预览中...</span>
-    </div>
+      <!-- 加载状态 -->
+      <div class="loading-state" v-if="isLoading">
+        <div class="loading-spinner"></div>
+        <span>生成预览中...</span>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -142,17 +191,52 @@ import MessagePreviewCard from './components/MessagePreviewCard.vue';
 import {
   promptPreviewService,
   type PreviewScenario,
-  type PreviewResult
+  type PreviewResult,
+  type PreviewMessage
 } from '@/services/promptPreviewService';
+import { tavernPresetService } from '@/services/tavernPresetService';
+import { promptOrderService } from '@/services/promptOrderService';
 import { toast } from '@/utils/toast';
 
+// 酒馆预设状态
+const hasTavernPreset = ref(false);
+const activePresetName = ref('');
+
 const selectedScenario = ref<PreviewScenario>('text_generation');
+
+// 是否为正文生成场景
+const isTextGenerationScenario = computed(() => {
+  return selectedScenario.value === 'text_generation';
+});
 const memoryCount = ref(3);
 const userInput = ref('继续当前活动');
 const isLoading = ref(false);
 const showScrollTop = ref(false);
 const showSeparatedView = ref(false);
 const tabPanelRef = ref<HTMLElement | null>(null);
+
+// 拖拽排序状态
+const dragStartIndex = ref<number | null>(null);
+const dragOverIndex = ref<number | null>(null);
+const customOrder = ref<string[] | null>(null);  // 🔥 改为 sourceId 数组
+const isCustomOrder = ref(false);
+const messagesListRef = ref<HTMLElement | null>(null);
+
+// 边缘自动滚动
+const autoScrollInterval = ref<ReturnType<typeof setInterval> | null>(null);
+const scrollDirection = ref<'up' | 'down' | null>(null);
+const EDGE_THRESHOLD = 80; // 边缘触发区域高度
+const SCROLL_SPEED = 12; // 滚动速度
+
+// 🔥 使用 promptOrderService 加载保存的排序顺序
+const loadSavedOrder = (scenario: PreviewScenario): string[] | null => {
+  return promptOrderService.getCustomOrder(scenario);
+};
+
+// 🔥 使用 promptOrderService 保存排序顺序
+const saveOrderToStorage = (scenario: PreviewScenario, order: string[] | null) => {
+  promptOrderService.saveCustomOrder(scenario, order);
+};
 
 const previewResult = ref<PreviewResult>({
   messages: [],
@@ -178,6 +262,38 @@ const displayMessages = computed(() => {
     return previewResult.value.preMergeMessages;
   }
   return previewResult.value.messages;
+});
+
+// 排序后的消息列表（基于 sourceId）
+const sortedMessages = computed(() => {
+  const messages = displayMessages.value;
+  if (!isCustomOrder.value || !customOrder.value || customOrder.value.length === 0) {
+    return messages;
+  }
+
+  // 🔥 根据 sourceId 重新排列消息
+  const orderMap = new Map<string, number>();
+  customOrder.value.forEach((sourceId, index) => {
+    orderMap.set(sourceId, index);
+  });
+
+  // 创建消息副本并排序
+  const sortedList = [...messages].sort((a, b) => {
+    const aOrder = orderMap.get(a.sourceId);
+    const bOrder = orderMap.get(b.sourceId);
+
+    // 如果两个消息都有排序位置，按排序位置排列
+    if (aOrder !== undefined && bOrder !== undefined) {
+      return aOrder - bOrder;
+    }
+    // 有排序位置的排在前面
+    if (aOrder !== undefined) return -1;
+    if (bOrder !== undefined) return 1;
+    // 都没有排序位置的保持原顺序
+    return 0;
+  });
+
+  return sortedList;
 });
 
 // 获取场景对应的默认记忆条数
@@ -245,6 +361,130 @@ const exportPreview = () => {
 // 复制处理（单条消息）
 const handleCopy = () => {
   toast.success('已复制到剪贴板');
+};
+
+// 拖拽排序处理
+const handleDragStart = (index: number) => {
+  dragStartIndex.value = index;
+};
+
+const handleDragOver = (index: number) => {
+  if (dragStartIndex.value !== null && dragStartIndex.value !== index) {
+    dragOverIndex.value = index;
+  }
+};
+
+const handleDragLeave = () => {
+  dragOverIndex.value = null;
+};
+
+const handleDrop = (targetIndex: number) => {
+  scrollDirection.value = null;
+  stopAutoScroll(); // 停止自动滚动
+
+  if (dragStartIndex.value === null || dragStartIndex.value === targetIndex) {
+    dragOverIndex.value = null;
+    dragStartIndex.value = null;
+    return;
+  }
+
+  const messages = sortedMessages.value;  // 🔥 使用已排序的消息列表
+  const sourceIndex = dragStartIndex.value;
+
+  // 🔥 初始化或更新自定义顺序（基于 sourceId）
+  let newOrder: string[];
+  if (customOrder.value && customOrder.value.length > 0) {
+    newOrder = [...customOrder.value];
+  } else {
+    // 使用当前消息的 sourceId 顺序
+    newOrder = messages.map(msg => msg.sourceId);
+  }
+
+  // 执行移动
+  const [movedItem] = newOrder.splice(sourceIndex, 1);
+  newOrder.splice(targetIndex, 0, movedItem);
+
+  customOrder.value = newOrder;
+  isCustomOrder.value = true;
+
+  // 持久化保存排序顺序（使用 promptOrderService）
+  saveOrderToStorage(selectedScenario.value, newOrder);
+
+  dragOverIndex.value = null;
+  dragStartIndex.value = null;
+
+  toast.success('消息顺序已更新，将影响实际发送顺序');
+};
+
+const resetOrder = () => {
+  customOrder.value = null;
+  isCustomOrder.value = false;
+  // 清除持久化的排序顺序
+  saveOrderToStorage(selectedScenario.value, null);
+  toast.success('已恢复原始顺序');
+};
+
+// 边缘自动滚动处理
+const handleListDragOver = (e: DragEvent) => {
+  e.preventDefault(); // 必须阻止默认行为才能接收drop事件
+
+  if (dragStartIndex.value === null) return;
+
+  // 获取整个页面的滚动容器
+  const scrollContainer = getScrollContainer();
+  if (!scrollContainer) return;
+
+  const rect = scrollContainer.getBoundingClientRect();
+  const y = e.clientY;
+
+  // 检测是否在顶部边缘
+  const isNearTop = y - rect.top < EDGE_THRESHOLD;
+  // 检测是否在底部边缘
+  const isNearBottom = rect.bottom - y < EDGE_THRESHOLD;
+
+  if (isNearTop) {
+    scrollDirection.value = 'up';
+    startAutoScroll();
+  } else if (isNearBottom) {
+    scrollDirection.value = 'down';
+    startAutoScroll();
+  } else {
+    scrollDirection.value = null;
+    stopAutoScroll();
+  }
+};
+
+const startAutoScroll = () => {
+  if (autoScrollInterval.value) return; // 已经在滚动了
+
+  autoScrollInterval.value = setInterval(() => {
+    const scrollContainer = getScrollContainer();
+    if (scrollContainer && scrollDirection.value) {
+      if (scrollDirection.value === 'up') {
+        scrollContainer.scrollTop -= SCROLL_SPEED;
+      } else if (scrollDirection.value === 'down') {
+        scrollContainer.scrollTop += SCROLL_SPEED;
+      }
+    }
+  }, 16); // ~60fps
+};
+
+const handleListDragLeave = (e: DragEvent) => {
+  // 只有真正离开列表时才停止（不是进入子元素）
+  const relatedTarget = e.relatedTarget as HTMLElement;
+  const container = messagesListRef.value;
+  if (container && relatedTarget && container.contains(relatedTarget)) {
+    return; // 仍在列表内
+  }
+  scrollDirection.value = null;
+  stopAutoScroll();
+};
+
+const stopAutoScroll = () => {
+  if (autoScrollInterval.value) {
+    clearInterval(autoScrollInterval.value);
+    autoScrollInterval.value = null;
+  }
 };
 
 // 一键复制全部提示词
@@ -316,11 +556,36 @@ const scrollToTop = () => {
 watch(selectedScenario, (newScenario) => {
   memoryCount.value = getDefaultMemoryCount(newScenario);
   showSeparatedView.value = false; // 重置视图模式
+
+  // 🔥 加载该场景的保存排序（使用 promptOrderService）
+  const savedOrder = loadSavedOrder(newScenario);
+  if (savedOrder && savedOrder.length > 0) {
+    customOrder.value = savedOrder;
+    isCustomOrder.value = true;
+  } else {
+    customOrder.value = null;
+    isCustomOrder.value = false;
+  }
+
+  // 如果是正文生成场景且有酒馆预设，不刷新预览
+  if (hasTavernPreset.value && newScenario === 'text_generation') {
+    return;
+  }
   refreshPreview();
 });
 
-// 刷新预览后自动滚动到顶部
+// 刷新预览后自动滚动到顶部，并加载保存的排序
 watch(() => previewResult.value.messages.length, () => {
+  // 🔥 从 promptOrderService 加载当前场景的保存排序
+  const savedOrder = loadSavedOrder(selectedScenario.value);
+  if (savedOrder && savedOrder.length > 0) {
+    customOrder.value = savedOrder;
+    isCustomOrder.value = true;
+  } else {
+    customOrder.value = null;
+    isCustomOrder.value = false;
+  }
+
   nextTick(() => {
     const container = getScrollContainer();
     if (container) {
@@ -330,10 +595,36 @@ watch(() => previewResult.value.messages.length, () => {
   });
 });
 
+// 检查酒馆预设状态
+const checkTavernPresetStatus = async () => {
+  try {
+    const activePreset = await tavernPresetService.getActivePreset();
+    hasTavernPreset.value = !!activePreset;
+    activePresetName.value = activePreset?.name || '';
+  } catch (error) {
+    console.error('检查酒馆预设状态失败:', error);
+    hasTavernPreset.value = false;
+  }
+};
+
 // 组件挂载时刷新预览和绑定滚动事件
-onMounted(() => {
+onMounted(async () => {
+  // 先检查酒馆预设状态
+  await checkTavernPresetStatus();
+
   memoryCount.value = getDefaultMemoryCount(selectedScenario.value);
-  refreshPreview();
+
+  // 🔥 加载当前场景的保存排序（使用 promptOrderService）
+  const savedOrder = loadSavedOrder(selectedScenario.value);
+  if (savedOrder && savedOrder.length > 0) {
+    customOrder.value = savedOrder;
+    isCustomOrder.value = true;
+  }
+
+  // 只有在没有激活酒馆预设，或不是正文生成场景时才刷新预览
+  if (!hasTavernPreset.value || !isTextGenerationScenario.value) {
+    refreshPreview();
+  }
 
   // 延迟绑定滚动事件，等待DOM渲染
   nextTick(() => {
@@ -344,12 +635,13 @@ onMounted(() => {
   });
 });
 
-// 组件卸载时解绑滚动事件
+// 组件卸载时解绑滚动事件和清理定时器
 onUnmounted(() => {
   const container = getScrollContainer();
   if (container) {
     container.removeEventListener('scroll', handleScroll);
   }
+  stopAutoScroll();
 });
 </script>
 
@@ -648,5 +940,110 @@ onUnmounted(() => {
 
 .scroll-top-btn:active {
   transform: translateY(0);
+}
+
+/* 酒馆预设激活提示样式 */
+.tavern-preset-active-notice {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(168, 85, 247, 0.1) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.tavern-preset-active-notice .notice-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.tavern-preset-active-notice .notice-header svg {
+  color: #a855f7;
+}
+
+.tavern-preset-active-notice .notice-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #a855f7;
+}
+
+.tavern-preset-active-notice .notice-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tavern-preset-active-notice .notice-content p {
+  margin: 0;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.6;
+}
+
+.tavern-preset-active-notice .notice-content strong {
+  color: #c084fc;
+  font-weight: 600;
+}
+
+.tavern-preset-active-notice .notice-hint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  border-left: 3px solid rgba(139, 92, 246, 0.5);
+}
+
+/* 拖拽排序相关样式 */
+.messages-list :deep(.message-preview-card.drag-over) {
+  border-top: 2px solid #4a9eff;
+  margin-top: -2px;
+}
+
+.messages-list :deep(.message-preview-card.drag-over)::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(180deg, rgba(74, 158, 255, 0.3) 0%, transparent 100%);
+}
+
+.order-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 12px;
+  background: rgba(74, 158, 255, 0.1);
+  border: 1px solid rgba(74, 158, 255, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+  color: rgba(74, 158, 255, 0.9);
+}
+
+.order-notice svg {
+  flex-shrink: 0;
+}
+
+.reset-order-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 4px 10px;
+  background: rgba(74, 158, 255, 0.15);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 4px;
+  color: #4a9eff;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.reset-order-btn:hover {
+  background: rgba(74, 158, 255, 0.25);
+  border-color: rgba(74, 158, 255, 0.5);
 }
 </style>

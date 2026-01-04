@@ -14,12 +14,15 @@ import { useUIStore } from '@/stores/uiStore';
 import type { GM_Response } from '@/types/AIGameMaster';
 import type { CharacterProfile, StateChangeLog, SaveData, GameTime, StateChange, GameMessage, StatusEffect } from '@/types/game';
 import { updateMasteredSkills } from './masteredSkillsCalculator';
-import {  assembleSystemPrompt } from './prompts/promptAssembler';
+import { assembleSystemPrompt } from './prompts/promptAssembler';
 import { getPrompt } from '@/services/defaultPrompts';
 import { normalizeGameTime } from './time';
 import { updateStatusEffects } from './statusEffectManager';
 import { sanitizeAITextForDisplay } from '@/utils/textSanitizer';
 import { textOptimizationService } from '@/services/textOptimizationService';
+import { tavernPresetService } from '@/services/tavernPresetService';
+import { promptOrderService } from '@/services/promptOrderService';
+import type { MacroContext } from '@/types/tavernPreset';
 
 type PlainObject = Record<string, unknown>;
 
@@ -193,8 +196,63 @@ class AIBidirectionalSystemClass {
         activePrompts.push('questSystem');
       }
 
-      const assembledPrompt = await assembleSystemPrompt(activePrompts, uiStore.actionOptionsPrompt);
-      const systemPrompt = `
+      const userActionForAI = (userMessage && userMessage.toString().trim()) || '继续当前活动';
+      console.log('[AI双向系统] 用户输入 userMessage:', userMessage);
+      console.log('[AI双向系统] 处理后 userActionForAI:', userActionForAI);
+
+      // 🔥 检测是否有激活的酒馆预设
+      const activePreset = await tavernPresetService.getActivePreset();
+
+      // 构建注入消息列表（带 sourceId 用于排序）
+      let injects: Array<{ content: string; role: 'system' | 'assistant' | 'user'; depth: number; position: 'in_chat' | 'none'; sourceId?: string }> = [];
+
+      if (activePreset) {
+        // 🔥 酒馆预设模式：使用预设的提示词完全替代原有系统提示词
+        console.log('[AI双向系统] 检测到激活的酒馆预设:', activePreset.name);
+
+        // 构建宏上下文
+        const macroContext: MacroContext = tavernPresetService.createMacroContext({
+          user: character?.名字 || stateForAI.角色基础信息?.名字 || '修仙者',
+          char: 'GM',
+          lastUserMessage: userActionForAI,
+          variables: {},
+          // 🔥 将游戏状态作为场景信息传入
+          scenario: `${coreStatusSummary}\n\n# 游戏状态\n你正在修仙世界《仙途》中扮演GM。以下是当前完整游戏存档(JSON格式):\n${stateJsonString}`,
+          // 短期记忆作为聊天历史
+          chatHistory: shortTermMemory.map(m => ({ role: 'assistant', content: m })),
+        });
+
+        // 使用酒馆预设构建消息
+        const presetMessages = tavernPresetService.buildPromptMessages(activePreset, macroContext);
+        console.log('[AI双向系统] 酒馆预设消息数量:', presetMessages.length);
+
+        // 将预设消息转换为 injects 格式
+        for (let i = 0; i < presetMessages.length; i++) {
+          const msg = presetMessages[i];
+          injects.push({
+            content: msg.content,
+            role: msg.role as 'system' | 'assistant' | 'user',
+            depth: msg.depth ?? 4,
+            position: 'in_chat',
+            sourceId: `tavern_prompt_${i}`,  // 🔥 酒馆预设消息标识符
+          });
+        }
+
+        // 🔥 添加 CoT 提示词（仅在启用系统CoT时注入）
+        if (uiStore.useSystemCot) {
+          const cotPrompt = await getPrompt('cotCore');
+          injects.push({
+            content: cotPrompt.replace('{{用户输入}}', userActionForAI),
+            role: 'system',
+            depth: 1,
+            position: 'in_chat',
+            sourceId: 'cot_prompt',  // 🔥 CoT提示词标识符
+          });
+        }
+      } else {
+        // 原有模式：使用 assembleSystemPrompt 构建系统提示词
+        const assembledPrompt = await assembleSystemPrompt(activePrompts, uiStore.actionOptionsPrompt);
+        const systemPrompt = `
 ${assembledPrompt}
 
 ${coreStatusSummary}
@@ -204,39 +262,38 @@ ${coreStatusSummary}
 ${stateJsonString}
 `.trim();
 
-      const userActionForAI = (userMessage && userMessage.toString().trim()) || '继续当前活动';
-      console.log('[AI双向系统] 用户输入 userMessage:', userMessage);
-      console.log('[AI双向系统] 处理后 userActionForAI:', userActionForAI);
+        injects = [
+          {
+            content: systemPrompt,
+            role: 'system',
+            depth: 4,
+            position: 'in_chat',
+            sourceId: 'system_prompt',  // 🔥 系统提示词标识符
+          }
+        ];
 
-      // 构建注入消息列表
-      const injects: Array<{ content: string; role: 'system' | 'assistant' | 'user'; depth: number; position: 'in_chat' | 'none' }> = [
-        {
-          content: systemPrompt,
-          role: 'system',
-          depth: 4,
-          position: 'in_chat',
+        // 如果有短期记忆，作为独立的 assistant 消息发送
+        if (shortTermMemory.length > 0) {
+          injects.push({
+            content: `# 【最近事件】\n${shortTermMemory.join('\n')}。根据这刚刚发生的文本事件，合理生成下一次文本信息，要保证衔接流畅、不断层，符合上文的文本信息`,
+            role: 'assistant',
+            depth: 2,
+            position: 'in_chat',
+            sourceId: 'short_term_memory',  // 🔥 短期记忆标识符
+          });
         }
-      ];
 
-      // 如果有短期记忆，作为独立的 assistant 消息发送
-      if (shortTermMemory.length > 0) {
-        injects.push({
-          content: `# 【最近事件】\n${shortTermMemory.join('\n')}。根据这刚刚发生的文本事件，合理生成下一次文本信息，要保证衔接流畅、不断层，符合上文的文本信息`,
-          role: 'assistant',
-          depth: 2,
-          position: 'in_chat',
-        });
-      }
-
-      // 🔥 添加 CoT 提示词（仅在启用系统CoT时注入）
-      if (uiStore.useSystemCot) {
-        const cotPrompt = await getPrompt('cotCore');
-        injects.push({
-          content: cotPrompt.replace('{{用户输入}}', userActionForAI),
-          role: 'system',
-          depth: 1,
-          position: 'in_chat',
-        });
+        // 🔥 添加 CoT 提示词（仅在启用系统CoT时注入）
+        if (uiStore.useSystemCot) {
+          const cotPrompt = await getPrompt('cotCore');
+          injects.push({
+            content: cotPrompt.replace('{{用户输入}}', userActionForAI),
+            role: 'system',
+            depth: 1,
+            position: 'in_chat',
+            sourceId: 'cot_prompt',  // 🔥 CoT提示词标识符
+          });
+        }
       }
 
       const finalUserInput = userActionForAI;
@@ -248,7 +305,12 @@ ${stateJsonString}
         role: 'assistant',
         depth: 0,
         position: 'in_chat',
+        sourceId: 'input_end_marker',  // 🔥 输入结束标记标识符
       });
+
+      // 🔥 应用自定义排序（如果有）
+      const scenario = activePreset ? 'tavern_preset' : 'text_generation';
+      injects = promptOrderService.applyOrderToInjects(injects, scenario);
 
       // 🔥 [流式传输修复] 优先使用配置中的streaming设置
       const { aiService } = await import('@/services/aiService');

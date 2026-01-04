@@ -85,10 +85,6 @@
               <span class="stat-value">{{ preset.stats.totalRegexScripts }}</span>
               <span class="stat-label">正则脚本</span>
             </div>
-            <div class="stat">
-              <span class="stat-value">{{ getMergeLabel(preset.mergeMode) }}</span>
-              <span class="stat-label">合并策略</span>
-            </div>
           </div>
         </div>
       </div>
@@ -274,10 +270,6 @@
             <div class="info-row">
               <label>导入时间：</label>
               <span>{{ formatDate(viewingPreset.importedAt) }}</span>
-            </div>
-            <div class="info-row">
-              <label>合并策略：</label>
-              <span>{{ getMergeLabel(viewingPreset.mergeMode) }}</span>
             </div>
           </div>
           <div class="detail-stats">
@@ -800,15 +792,6 @@ function formatPlacement(placement: number[]): string {
     2: '斜杠命令',
   }
   return placement.map((p) => labels[p] || String(p)).join(', ')
-}
-
-function getMergeLabel(mode: string): string {
-  const labels: Record<string, string> = {
-    replace: '完全替换',
-    'tavern-first': '酒馆优先',
-    'web-first': '网页优先',
-  }
-  return labels[mode] || mode
 }
 
 // 生命周期

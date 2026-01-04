@@ -3,11 +3,28 @@
     class="message-preview-card"
     :class="[
       `role-${message.role}`,
-      { expanded: isExpanded, truncated: message.truncated }
+      { expanded: isExpanded, truncated: message.truncated, dragging: isDragging }
     ]"
+    :draggable="draggable"
+    @dragstart="handleDragStart"
+    @dragend="handleDragEnd"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
   >
     <!-- 消息头部 -->
     <div class="card-header" @click="toggleExpand">
+      <!-- 拖拽手柄 -->
+      <div
+        v-if="draggable"
+        class="drag-handle"
+        @mousedown.stop
+        title="拖拽排序"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16">
+          <path fill="currentColor" d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+        </svg>
+      </div>
       <div class="header-left">
         <span class="role-badge" :class="message.role">
           {{ getRoleLabel(message.role) }}
@@ -55,18 +72,27 @@ import type { PreviewMessage } from '@/services/promptPreviewService';
 
 const props = withDefaults(defineProps<{
   message: PreviewMessage;
+  index?: number;
   showDepth?: boolean;
   showActions?: boolean;
+  draggable?: boolean;
 }>(), {
   showDepth: true,
   showActions: true,
+  draggable: false,
+  index: 0,
 });
 
 const emit = defineEmits<{
   (e: 'copy', content: string): void;
+  (e: 'dragStart', index: number): void;
+  (e: 'dragOver', index: number): void;
+  (e: 'dragLeave', index: number): void;
+  (e: 'drop', index: number): void;
 }>();
 
 const isExpanded = ref(false);
+const isDragging = ref(false);
 
 const displayContent = computed(() => {
   if (isExpanded.value && props.message.fullContent) {
@@ -106,6 +132,35 @@ const copyContent = async () => {
     console.error('复制失败:', error);
   }
 };
+
+// 拖拽事件处理
+const handleDragStart = (e: DragEvent) => {
+  if (!props.draggable) return;
+  isDragging.value = true;
+  e.dataTransfer?.setData('text/plain', String(props.index));
+  emit('dragStart', props.index);
+};
+
+const handleDragEnd = () => {
+  isDragging.value = false;
+};
+
+const handleDragOver = (e: DragEvent) => {
+  if (!props.draggable) return;
+  e.preventDefault();
+  emit('dragOver', props.index);
+};
+
+const handleDragLeave = () => {
+  if (!props.draggable) return;
+  emit('dragLeave', props.index);
+};
+
+const handleDrop = (e: DragEvent) => {
+  if (!props.draggable) return;
+  e.preventDefault();
+  emit('drop', props.index);
+};
 </script>
 
 <style scoped>
@@ -121,6 +176,19 @@ const copyContent = async () => {
 .message-preview-card:hover {
   border-color: rgba(255, 255, 255, 0.15);
   background: rgba(35, 40, 50, 0.9);
+}
+
+.message-preview-card.dragging {
+  opacity: 0.5;
+  transform: scale(0.98);
+}
+
+.message-preview-card[draggable="true"] {
+  cursor: grab;
+}
+
+.message-preview-card[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .message-preview-card.role-system {
@@ -143,6 +211,27 @@ const copyContent = async () => {
   background: rgba(0, 0, 0, 0.2);
   cursor: pointer;
   user-select: none;
+}
+
+.drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: grab;
+  transition: color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.drag-handle:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
 }
 
 .header-left {

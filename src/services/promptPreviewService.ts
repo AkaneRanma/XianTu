@@ -19,6 +19,7 @@ import { REGEX_PLACEMENT } from '@/types/tavernPreset';
 
 export interface PreviewMessage {
   id: string;
+  sourceId: string;         // 🔥 稳定的源标识符（用于排序持久化）
   role: 'system' | 'user' | 'assistant';
   content: string;
   source: string;           // 来源说明（如"系统提示词"、"短期记忆"等）
@@ -353,13 +354,15 @@ class PromptPreviewService {
     role: 'system' | 'user' | 'assistant',
     content: string,
     source: string,
-    depth: number
+    depth: number,
+    sourceId: string  // 🔥 新增：稳定的源标识符
   ): PreviewMessage {
     const truncateLength = 500;
     const truncated = content.length > truncateLength;
 
     return {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      sourceId,  // 🔥 添加源标识符
       role,
       content: truncated ? content.substring(0, truncateLength) + '...' : content,
       source,
@@ -453,7 +456,7 @@ ${coreStatusSummary}
 ${stateJsonString}
 `.trim();
 
-    messages.push(this.createMessage('system', systemPrompt, '系统提示词（包含游戏状态）', 4));
+    messages.push(this.createMessage('system', systemPrompt, '系统提示词（包含游戏状态）', 4, 'system_prompt'));
 
     // 4. 获取组合记忆（短期+中期+长期）- 正文生成使用完整记忆
     const combinedMemories = this.getCombinedMemories(memoryCount);
@@ -461,13 +464,15 @@ ${stateJsonString}
     // 5. 世界书条目（作用于正文）- 需要提供匹配上下文
     const matchContext = `${userInput}\n${combinedMemories.combined.slice(-5).join('\n')}`;
     const textWorldBooks = this.getWorldBookEntriesForTarget('text', matchContext);
-    for (const entry of textWorldBooks) {
+    for (let i = 0; i < textWorldBooks.length; i++) {
+      const entry = textWorldBooks[i];
       const triggerInfo = entry.triggerMode === 'keyword' ? ' 🟢' : ' 🔵';
       messages.push(this.createMessage(
         entry.role,
         entry.content,
         `世界书: ${entry.name}${triggerInfo}`,
-        entry.depth
+        entry.depth,
+        `world_book_text_${i}`  // 🔥 世界书条目标识符
       ));
     }
 
@@ -475,7 +480,7 @@ ${stateJsonString}
     if (combinedMemories.combined.length > 0) {
       const memoryPrompt = this.formatCombinedMemoryPrompt(combinedMemories);
       const memorySummary = `短期${combinedMemories.shortTerm.length} + 中期${combinedMemories.midTerm.length} + 长期${combinedMemories.longTerm.length}`;
-      messages.push(this.createMessage('assistant', memoryPrompt, `记忆信息（${memorySummary}）`, 2));
+      messages.push(this.createMessage('assistant', memoryPrompt, `记忆信息（${memorySummary}）`, 2, 'memory_combined'));
     }
 
     // 7. CoT提示词（如果启用）
@@ -485,15 +490,16 @@ ${stateJsonString}
         'system',
         cotPrompt.replace('{{用户输入}}', userInput),
         'CoT思维链提示词',
-        1
+        1,
+        'cot_prompt'
       ));
     }
 
     // 8. 用户输入
-    messages.push(this.createMessage('user', userInput, '用户输入', 0));
+    messages.push(this.createMessage('user', userInput, '用户输入', 0, 'user_input'));
 
     // 9. 占位符
-    messages.push(this.createMessage('assistant', '</input>', '输入结束占位符', 0));
+    messages.push(this.createMessage('assistant', '</input>', '输入结束占位符', 0, 'input_end_marker'));
 
     // 按depth排序（降序）
     messages.sort((a, b) => b.depth - a.depth);
@@ -567,7 +573,7 @@ ${sections.join('\n\n---\n\n')}
 ${stateJsonString}
 `.trim();
 
-    messages.push(this.createMessage('system', step2SystemPrompt, 'Step2系统提示词', 4));
+    messages.push(this.createMessage('system', step2SystemPrompt, 'Step2系统提示词', 4, 'step2_system'));
 
     // 2. 获取短期记忆（需要先获取，用于世界书关键词匹配）
     const shortTermMemories = this.getShortTermMemories();
@@ -575,20 +581,22 @@ ${stateJsonString}
     // 3. 世界书条目（作用于变量）- 需要提供匹配上下文
     const matchContext = `${userInput}\n${step1Text}\n${shortTermMemories.slice(-memoryCount).join('\n')}`;
     const variableWorldBooks = this.getWorldBookEntriesForTarget('variable', matchContext);
-    for (const entry of variableWorldBooks) {
+    for (let i = 0; i < variableWorldBooks.length; i++) {
+      const entry = variableWorldBooks[i];
       const triggerInfo = entry.triggerMode === 'keyword' ? ' 🟢' : ' 🔵';
       messages.push(this.createMessage(
         entry.role,
         entry.content,
         `世界书: ${entry.name}${triggerInfo}`,
-        entry.depth
+        entry.depth,
+        `world_book_variable_${i}`  // 🔥 变量场景世界书标识符
       ));
     }
 
     // 4. 短期记忆提示词
     if (memoryCount > 0 && shortTermMemories.length > 0) {
       const memoryPrompt = this.formatMemoryPrompt(shortTermMemories, memoryCount);
-      messages.push(this.createMessage('assistant', memoryPrompt, `短期记忆（${Math.min(memoryCount, shortTermMemories.length)}条）`, 2));
+      messages.push(this.createMessage('assistant', memoryPrompt, `短期记忆（${Math.min(memoryCount, shortTermMemories.length)}条）`, 2, 'short_term_memory'));
     }
 
     // 5. 用户输入（包含第1步结果）
@@ -605,10 +613,10 @@ ${step1Text}
 请按"分步生成（第2步）"规则输出 JSON。
 `.trim();
 
-    messages.push(this.createMessage('user', step2UserInput, '用户输入（含Step1结果）', 0));
+    messages.push(this.createMessage('user', step2UserInput, '用户输入（含Step1结果）', 0, 'step2_user_input'));
 
     // 6. 占位符
-    messages.push(this.createMessage('assistant', '</input>', '输入结束占位符', 0));
+    messages.push(this.createMessage('assistant', '</input>', '输入结束占位符', 0, 'input_end_marker'));
 
     // 按depth排序（降序）
     messages.sort((a, b) => b.depth - a.depth);
@@ -638,24 +646,28 @@ ${step1Text}
       return true; // 始终触发模式
     });
 
-    for (const entry of enabledEntries) {
+    for (let i = 0; i < enabledEntries.length; i++) {
+      const entry = enabledEntries[i];
       const triggerInfo = entry.triggerMode === 'keyword' ? ' 🟢' : ' 🔵';
       messages.push(this.createMessage(
         entry.role,
         entry.content,
         `优化条目: ${entry.name}${triggerInfo}`,
-        entry.depth
+        entry.depth,
+        `optimization_entry_${i}`  // 🔥 优化条目标识符
       ));
     }
 
     // 2. 世界书条目（作用于优化）- 需要提供匹配上下文
     const optimizationWorldBooks = this.getWorldBookEntriesForTarget('optimization', sourceText);
-    for (const entry of optimizationWorldBooks) {
+    for (let i = 0; i < optimizationWorldBooks.length; i++) {
+      const entry = optimizationWorldBooks[i];
       messages.push(this.createMessage(
         entry.role,
         entry.content,
         `世界书: ${entry.name}`,
-        entry.depth
+        entry.depth,
+        `world_book_optimization_${i}`  // 🔥 优化场景世界书标识符
       ));
     }
 
@@ -664,12 +676,12 @@ ${step1Text}
       const shortTermMemories = this.getShortTermMemories();
       if (shortTermMemories.length > 0) {
         const memoryPrompt = this.formatMemoryPrompt(shortTermMemories, memoryCount);
-        messages.push(this.createMessage('assistant', memoryPrompt, `短期记忆（${Math.min(memoryCount, shortTermMemories.length)}条）`, 2));
+        messages.push(this.createMessage('assistant', memoryPrompt, `短期记忆（${Math.min(memoryCount, shortTermMemories.length)}条）`, 2, 'short_term_memory'));
       }
     }
 
     // 4. 原始正文
-    messages.push(this.createMessage('user', sourceText, '待优化正文', 0));
+    messages.push(this.createMessage('user', sourceText, '待优化正文', 0, 'source_text'));
 
     // 按depth排序（降序）
     messages.sort((a, b) => b.depth - a.depth);
@@ -802,7 +814,8 @@ ${step1Text}
         'system',
         '⚠️ 没有激活的酒馆预设。请在"酒馆预设"标签页中导入并激活一个预设。',
         '提示',
-        0
+        0,
+        'tavern_no_preset'
       ));
       return this.calculateResult(messages);
     }
@@ -904,7 +917,8 @@ ${step1Text}
             'system',
             markerContent,
             sourceLabel,
-            depthCounter--
+            depthCounter--,
+            `tavern_marker_${prompt.identifier}`  // 🔥 酒馆预设占位符标识符
           ));
         }
         continue;
@@ -930,7 +944,8 @@ ${step1Text}
         role,
         processedContent,
         `${sourceIcon} ${sourceName}`,
-        depthCounter--
+        depthCounter--,
+        `tavern_prompt_${prompt.identifier || depthCounter}`  // 🔥 酒馆预设消息标识符
       ));
     }
 
@@ -969,7 +984,8 @@ ${step1Text}
       'assistant',
       squashedContent,
       `ChatSquash输出 (${activePreset.name})`,
-      0
+      0,
+      'tavern_squashed_output'  // 🔥 ChatSquash输出标识符
     ));
 
     // 返回结果，包含合并前的消息
@@ -1189,7 +1205,8 @@ ${step1Text}
       `📊 启用提示词: ${enabledPrompts.length}/${orderedPrompts.length}\n` +
       `🔧 温度: ${modelParams?.temperature || 'N/A'} | Top-P: ${modelParams?.top_p || 'N/A'}`,
       '预设信息',
-      999
+      999,
+      'tavern_preset_info'  // 🔥 预设信息标识符
     ));
 
     // 2. 处理每个启用的提示词条目
@@ -1204,7 +1221,8 @@ ${step1Text}
             'system',
             markerContent,
             `📍 ${markerName}`,
-            depthCounter--
+            depthCounter--,
+            `tavern_marker_${prompt.identifier}`  // 🔥 酒馆预设占位符标识符
           ));
         }
         continue;
@@ -1230,7 +1248,8 @@ ${step1Text}
         role,
         processedContent,
         `${sourceIcon} ${sourceName}`,
-        depthCounter--
+        depthCounter--,
+        `tavern_prompt_${prompt.identifier || depthCounter}`  // 🔥 酒馆预设消息标识符
       ));
     }
 
@@ -1239,7 +1258,8 @@ ${step1Text}
       'user',
       userInput,
       '用户输入',
-      0
+      0,
+      'user_input'
     ));
 
     // 4. 如果有正则脚本，添加正则信息
@@ -1254,7 +1274,8 @@ ${step1Text}
         'system',
         `🔄 启用的正则脚本 (${enabledRegex.length}):\n${regexInfo}`,
         '正则脚本',
-        -1
+        -1,
+        'tavern_regex_info'  // 🔥 正则脚本信息标识符
       ));
     }
 

@@ -138,14 +138,9 @@
                 导入后立即激活
               </label>
             </div>
-            <div class="option-row">
-              <label>合并策略：</label>
-              <select v-model="mergeMode">
-                <option value="replace">完全替换（仅使用酒馆预设）</option>
-                <option value="tavern-first">酒馆优先（推荐）</option>
-                <option value="web-first">网页优先</option>
-              </select>
-            </div>
+            <p class="option-hint">
+              💡 启用酒馆预设后，将完全替代网页端的提示词系统进行AI生成
+            </p>
           </div>
 
           <!-- 警告信息 -->
@@ -202,7 +197,6 @@ const isImporting = ref(false)
 
 // 选项
 const customName = ref('')
-const mergeMode = ref<'replace' | 'tavern-first' | 'web-first'>('tavern-first')
 const activateImmediately = ref(true)
 const showPromptsList = ref(false)
 
@@ -322,7 +316,6 @@ async function handleImport() {
       {
         fileName: fileName.value,
         customName: customName.value || undefined,
-        mergeMode: mergeMode.value,
         activateImmediately: activateImmediately.value,
       },
     )
@@ -649,15 +642,11 @@ async function handleImport() {
   font-size: 14px;
 }
 
-.option-row select {
-  flex: 1;
-  background: var(--bg-secondary, #1e1e2e);
-  border: 1px solid var(--border-color, #444);
-  border-radius: 6px;
-  padding: 8px 12px;
-  color: var(--text-primary, #fff);
-  font-size: 14px;
-  margin-left: 8px;
+.option-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  line-height: 1.5;
 }
 
 .warnings-card {

@@ -218,9 +218,6 @@ export interface LocalTavernPreset {
   importedAt: string // 导入时间（ISO格式）
   enabled: boolean // 是否激活
 
-  // 合并策略
-  mergeMode: 'replace' | 'tavern-first' | 'web-first'
-
   // 原始配置
   modelParams: {
     temperature: number
@@ -255,7 +252,6 @@ export interface LocalTavernPreset {
 // 预设导入选项
 export interface TavernPresetImportOptions {
   customName?: string
-  mergeMode?: 'replace' | 'tavern-first' | 'web-first'
   activateImmediately?: boolean
 }
 

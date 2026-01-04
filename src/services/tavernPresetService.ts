@@ -118,7 +118,6 @@ class TavernPresetService {
     const localPreset = this.convertToLocalPreset(rawData, {
       fileName: file.name,
       customName: options?.customName,
-      mergeMode: options?.mergeMode,
     })
 
     // 保存到数据库
@@ -156,7 +155,6 @@ class TavernPresetService {
     const localPreset = this.convertToLocalPreset(rawData, {
       fileName: options?.fileName,
       customName: options?.customName,
-      mergeMode: options?.mergeMode,
     })
 
     await this.savePreset(localPreset)
@@ -256,7 +254,6 @@ class TavernPresetService {
     options: {
       fileName?: string
       customName?: string
-      mergeMode?: 'replace' | 'tavern-first' | 'web-first'
     },
   ): LocalTavernPreset {
     // 生成唯一ID
@@ -331,8 +328,6 @@ class TavernPresetService {
       sourceFileName: options.fileName,
       importedAt: new Date().toISOString(),
       enabled: false,
-
-      mergeMode: options.mergeMode || 'tavern-first',
 
       modelParams: {
         temperature: rawData.temperature ?? 1.0,
