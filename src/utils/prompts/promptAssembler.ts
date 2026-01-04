@@ -1,6 +1,5 @@
 import { getPrompt } from '@/services/defaultPrompts';
-import { SAVE_DATA_STRUCTURE, stripNsfwContent } from './definitions/dataDefinitions';
-import { isTavernEnv } from '@/utils/tavern';
+import { SAVE_DATA_STRUCTURE } from './definitions/dataDefinitions';
 
 // 导出常用的规则常量
 export { SAVE_DATA_STRUCTURE as DATA_STRUCTURE_DEFINITIONS };
@@ -28,16 +27,13 @@ export async function assembleSystemPrompt(activePrompts: string[], customAction
     getPrompt('worldStandards')
   ]);
 
-  const tavernEnv = isTavernEnv();
-  const sanitizedDataDefinitionsPrompt = tavernEnv ? dataDefinitionsPrompt : stripNsfwContent(dataDefinitionsPrompt);
-
   const promptSections = [
     // 1. 核心规则（JSON格式、响应格式、数据结构严格性）
     coreRulesPrompt,
     // 2. 业务规则
     businessRulesPrompt,
-    // 3. 数据结构定义
-    sanitizedDataDefinitionsPrompt,
+    // 3. 数据结构定义（不再过滤NSFW内容）
+    dataDefinitionsPrompt,
     // 4. 文本格式与命名
     textFormatsPrompt,
     // 5. 世界设定参考

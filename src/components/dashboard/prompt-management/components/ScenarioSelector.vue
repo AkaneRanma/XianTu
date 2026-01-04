@@ -72,6 +72,12 @@ const scenarios: ScenarioOption[] = [
     description: '重新优化正文时发送的消息',
     icon: '♻️',
   },
+  {
+    value: 'tavern_preset',
+    label: '酒馆预设',
+    description: '预览当前激活的酒馆预设构建的消息',
+    icon: '🍺',
+  },
 ];
 
 const currentDescription = computed(() => {

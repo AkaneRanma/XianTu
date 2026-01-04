@@ -141,6 +141,11 @@
         <SendPreviewTab />
       </div>
 
+      <!-- 酒馆预设 -->
+      <div v-else-if="activeTab === 'tavern'" class="tab-panel tavern-panel">
+        <TavernPresetTab />
+      </div>
+
       <!-- 世界书 -->
       <div v-else-if="activeTab === 'worldbook'" class="tab-panel">
         <WorldBookTab />
@@ -180,6 +185,7 @@ import { toast } from '@/utils/toast';
 
 // 子组件
 import SendPreviewTab from './prompt-management/SendPreviewTab.vue';
+import TavernPresetTab from './prompt-management/TavernPresetTab.vue';
 import WorldBookTab from './prompt-management/WorldBookTab.vue';
 import TextOptimizationTab from './prompt-management/TextOptimizationTab.vue';
 import MemoryPromptConfig from './prompt-management/MemoryPromptConfig.vue';
@@ -191,6 +197,7 @@ const router = useRouter();
 const tabs = [
   { key: 'prompts', label: '提示词', icon: '📝' },
   { key: 'preview', label: '发送预览', icon: '👁️' },
+  { key: 'tavern', label: '酒馆预设', icon: '🍺' },
   { key: 'worldbook', label: '世界书', icon: '📚' },
   { key: 'optimization', label: '正文优化', icon: '✨' },
   { key: 'memory', label: '记忆设置', icon: '🧠' },
@@ -830,6 +837,11 @@ function downloadJSON(data: any, filename: string) {
   padding: 20px;
   flex: 1;
   overflow-y: auto;
+}
+
+/* 酒馆预设面板特殊样式 */
+.tab-panel.tavern-panel {
+  padding: 0;
 }
 
 /* 响应式 */

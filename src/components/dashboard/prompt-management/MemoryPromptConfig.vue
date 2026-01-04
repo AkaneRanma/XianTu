@@ -5,7 +5,7 @@
       <div class="section-header">
         <span class="section-title">短期记忆条数配置</span>
       </div>
-      <div class="config-grid-5">
+      <div class="config-grid-6">
         <div class="config-item">
           <label>正文生成</label>
           <input
@@ -66,10 +66,40 @@
           />
           <span class="unit">条</span>
         </div>
+        <div class="config-item">
+          <label>酒馆预设</label>
+          <input
+            type="number"
+            v-model.number="config.tavernPresetCount"
+            min="0"
+            max="20"
+            @change="saveConfig"
+            class="number-input"
+          />
+          <span class="unit">条</span>
+        </div>
       </div>
       <p class="config-hint">
-        当前可用短期记忆: {{ availableMemoryCount }} 条。每个场景独立配置，再生成场景可设置不同的记忆条数。
+        每个场景独立配置记忆条数。正文生成和酒馆预设会额外包含全部中期和长期记忆。
       </p>
+      <div class="memory-stats">
+        <span class="stat-item">
+          <span class="stat-label">长期:</span>
+          <span class="stat-value">{{ longTermCount }}</span>
+        </span>
+        <span class="stat-item">
+          <span class="stat-label">中期:</span>
+          <span class="stat-value">{{ midTermCount }}</span>
+        </span>
+        <span class="stat-item">
+          <span class="stat-label">短期:</span>
+          <span class="stat-value">{{ shortTermCount }}</span>
+        </span>
+        <span class="stat-item total">
+          <span class="stat-label">合计:</span>
+          <span class="stat-value">{{ totalMemoryCount }}</span>
+        </span>
+      </div>
     </div>
 
     <!-- 记忆提示词模板 -->
@@ -81,11 +111,27 @@
         </button>
       </div>
       <div class="template-info">
-        <p>可用变量:</p>
-        <ul>
-          <li><code v-pre>{{memories}}</code> - 记忆内容</li>
-          <li><code v-pre>{{count}}</code> - 记忆条数</li>
-        </ul>
+        <p>可用变量（正文生成/酒馆预设支持分类变量）:</p>
+        <div class="variables-grid">
+          <div class="var-group">
+            <span class="var-group-title">记忆内容</span>
+            <ul>
+              <li><code v-pre>{{memories}}</code> - 所有记忆</li>
+              <li><code v-pre>{{shortTermMemories}}</code> - 仅短期</li>
+              <li><code v-pre>{{midTermMemories}}</code> - 仅中期</li>
+              <li><code v-pre>{{longTermMemories}}</code> - 仅长期</li>
+            </ul>
+          </div>
+          <div class="var-group">
+            <span class="var-group-title">条数统计</span>
+            <ul>
+              <li><code v-pre>{{count}}</code> - 总条数</li>
+              <li><code v-pre>{{shortTermCount}}</code> - 短期条数</li>
+              <li><code v-pre>{{midTermCount}}</code> - 中期条数</li>
+              <li><code v-pre>{{longTermCount}}</code> - 长期条数</li>
+            </ul>
+          </div>
+        </div>
       </div>
       <textarea
         v-model="config.promptTemplate"
@@ -120,6 +166,7 @@ import {
   promptPreviewService,
   type ShortTermMemoryConfig
 } from '@/services/promptPreviewService';
+import { useGameStateStore } from '@/stores/gameStateStore';
 import { toast } from '@/utils/toast';
 
 const config = ref<ShortTermMemoryConfig>({
@@ -128,14 +175,28 @@ const config = ref<ShortTermMemoryConfig>({
   variableRerollCount: 3,
   textOptimizationCount: 0,
   textOptimizationRerollCount: 0,
+  tavernPresetCount: 5,
   promptTemplate: '',
 });
 
 const previewText = ref('');
+const gameStateStore = useGameStateStore();
 
-// 可用的短期记忆条数
-const availableMemoryCount = computed(() => {
-  return promptPreviewService.getShortTermMemories().length;
+// 各类记忆条数
+const longTermCount = computed(() => {
+  return gameStateStore.memory?.长期记忆?.length || 0;
+});
+
+const midTermCount = computed(() => {
+  return gameStateStore.memory?.中期记忆?.length || 0;
+});
+
+const shortTermCount = computed(() => {
+  return gameStateStore.memory?.短期记忆?.length || 0;
+});
+
+const totalMemoryCount = computed(() => {
+  return longTermCount.value + midTermCount.value + shortTermCount.value;
 });
 
 // 加载配置
@@ -160,22 +221,35 @@ const resetTemplate = () => {
   }
 };
 
-// 刷新预览
+// 刷新预览（使用正文生成场景的完整记忆）
 const refreshPreview = () => {
-  const memories = promptPreviewService.getShortTermMemories();
-  const count = Math.min(config.value.textGenerationCount, memories.length);
+  const memory = gameStateStore.memory;
 
-  if (count === 0 || memories.length === 0) {
-    previewText.value = '(暂无短期记忆)';
+  const longTerm = memory?.长期记忆 || [];
+  const midTerm = memory?.中期记忆 || [];
+  const shortTerm = memory?.短期记忆 || [];
+
+  // 按配置的条数获取短期记忆
+  const limitedShortTerm = shortTerm.slice(-config.value.textGenerationCount);
+
+  // 合并记忆（顺序：长期→中期→短期）
+  const combined = [...longTerm, ...midTerm, ...limitedShortTerm];
+
+  if (combined.length === 0) {
+    previewText.value = '(暂无记忆)';
     return;
   }
 
-  const selectedMemories = memories.slice(-count);
-  const memoriesText = selectedMemories.join('\n');
-
+  // 应用模板（支持所有分类变量）
   previewText.value = config.value.promptTemplate
-    .replace('{{memories}}', memoriesText)
-    .replace('{{count}}', String(count));
+    .replace(/\{\{memories\}\}/g, combined.join('\n'))
+    .replace(/\{\{shortTermMemories\}\}/g, limitedShortTerm.join('\n'))
+    .replace(/\{\{midTermMemories\}\}/g, midTerm.join('\n'))
+    .replace(/\{\{longTermMemories\}\}/g, longTerm.join('\n'))
+    .replace(/\{\{count\}\}/g, String(combined.length))
+    .replace(/\{\{shortTermCount\}\}/g, String(limitedShortTerm.length))
+    .replace(/\{\{midTermCount\}\}/g, String(midTerm.length))
+    .replace(/\{\{longTermCount\}\}/g, String(longTerm.length));
 };
 
 onMounted(() => {
@@ -212,20 +286,20 @@ onMounted(() => {
   color: #fff;
 }
 
-.config-grid-5 {
+.config-grid-6 {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 12px;
 }
 
-@media (max-width: 800px) {
-  .config-grid-5 {
+@media (max-width: 900px) {
+  .config-grid-6 {
     grid-template-columns: repeat(3, 1fr);
   }
 }
 
 @media (max-width: 500px) {
-  .config-grid-5 {
+  .config-grid-6 {
     grid-template-columns: repeat(2, 1fr);
   }
 }
@@ -271,6 +345,37 @@ onMounted(() => {
   color: rgba(255, 255, 255, 0.4);
 }
 
+.memory-stats {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a9eff;
+}
+
+.stat-item.total .stat-value {
+  color: #4aff9e;
+}
+
 .reset-btn,
 .refresh-btn {
   display: flex;
@@ -300,20 +405,49 @@ onMounted(() => {
 }
 
 .template-info p {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.7);
 }
 
-.template-info ul {
-  margin: 0;
-  padding-left: 16px;
+.variables-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
-.template-info li {
+@media (max-width: 500px) {
+  .variables-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.var-group {
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.var-group-title {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.var-group ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.var-group li {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.6);
-  margin-bottom: 2px;
+  margin-bottom: 3px;
 }
 
 .template-info code {

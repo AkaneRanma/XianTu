@@ -421,7 +421,12 @@ export function stripNsfwContent(input: string): string {
     .trim();
 }
 
-export function getSaveDataStructureForEnv(isTavern: boolean): string {
-  if (isTavern) return SAVE_DATA_STRUCTURE;
-  return stripNsfwContent(SAVE_DATA_STRUCTURE);
+/**
+ * 获取数据结构定义
+ * 网页版和酒馆版都不再过滤NSFW内容
+ * @param _isTavern 保留参数以兼容旧代码，但不再使用
+ */
+export function getSaveDataStructureForEnv(_isTavern?: boolean): string {
+  // 彻底放开NSFW内容，不再根据环境过滤
+  return SAVE_DATA_STRUCTURE;
 }

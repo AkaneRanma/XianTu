@@ -19,7 +19,6 @@ import { getPrompt } from '@/services/defaultPrompts';
 import { normalizeGameTime } from './time';
 import { updateStatusEffects } from './statusEffectManager';
 import { sanitizeAITextForDisplay } from '@/utils/textSanitizer';
-import { stripNsfwContent } from '@/utils/prompts/definitions/dataDefinitions';
 import { textOptimizationService } from '@/services/textOptimizationService';
 
 type PlainObject = Record<string, unknown>;
@@ -345,12 +344,12 @@ ${stateJsonString}
             getPrompt('worldStandards')
           ]);
 
-          const sanitizedDataDefinitionsPrompt = tavernEnv ? dataDefinitionsPrompt : stripNsfwContent(dataDefinitionsPrompt);
+          // 彻底放开NSFW内容，不再根据环境过滤
           const sections: string[] = [
             stepRules,
             coreOutputRulesPrompt,
             businessRulesPrompt,
-            sanitizedDataDefinitionsPrompt,
+            dataDefinitionsPrompt,
             textFormatsPrompt,
             worldStandardsPrompt
           ];
@@ -2059,15 +2058,14 @@ ${saveDataJson}`;
         getPrompt('worldStandards')
       ]);
 
-      // 根据环境处理 NSFW 内容
-      const sanitizedDataDefinitionsPrompt = tavernEnv ? dataDefinitionsPrompt : stripNsfwContent(dataDefinitionsPrompt);
+      // 彻底放开NSFW内容，不再根据环境过滤
 
       // 组装完整的第2步系统提示词
       const sections: string[] = [
         stepRulesPrompt.trim(),
         coreOutputRulesPrompt,
         businessRulesPrompt,
-        sanitizedDataDefinitionsPrompt,
+        dataDefinitionsPrompt,
         textFormatsPrompt,
         worldStandardsPrompt
       ];

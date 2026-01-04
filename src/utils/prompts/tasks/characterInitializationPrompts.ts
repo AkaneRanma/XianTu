@@ -6,10 +6,9 @@
 
 import type { World, TalentTier, Origin, SpiritRoot, Talent } from '@/types';
 import type { WorldInfo, WorldMapConfig, SystemConfig } from '@/types/game';
-import { SAVE_DATA_STRUCTURE, stripNsfwContent } from '../definitions/dataDefinitions';
+import { SAVE_DATA_STRUCTURE } from '../definitions/dataDefinitions';
 import { characterInitializationCotPrompt } from '../cot/characterInitializationCot';
 import { assembleSystemPrompt } from '../promptAssembler';
-import { isTavernEnv } from '@/utils/tavern';
 
 // =====================================================================
 // 响应格式定义
@@ -115,9 +114,9 @@ ${RESOURCE_RANGES}
 ${SAVE_DATA_STRUCTURE}
 `.trim();
 
-export function getCharacterInitializationPromptForEnv(isTavern: boolean): string {
-  if (isTavern) return CHARACTER_INITIALIZATION_PROMPT;
-  return stripNsfwContent(CHARACTER_INITIALIZATION_PROMPT);
+export function getCharacterInitializationPromptForEnv(_isTavern?: boolean): string {
+  // 彻底放开NSFW内容，不再根据环境过滤
+  return CHARACTER_INITIALIZATION_PROMPT;
 }
 
 // =====================================================================
@@ -265,7 +264,8 @@ ${NARRATIVE_RULES}
 ${RESOURCE_RANGES}
 `.trim();
 
-  return isTavernEnv() ? prompt : stripNsfwContent(prompt);
+  // 彻底放开NSFW内容，不再根据环境过滤
+  return prompt;
 }
 
 /**
