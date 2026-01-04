@@ -22,6 +22,7 @@
             @mouseup="cancelLongPress"
             @mouseleave="cancelLongPress"
             @touchstart.passive="startLongPress($event, part.content)"
+            @touchmove.passive="handleTouchMove"
             @touchend="cancelLongPress"
             @touchcancel="cancelLongPress"
           />
@@ -38,7 +39,7 @@
           <button class="retry-btn-xiantu" @click="generateImage(part.content)">重试</button>
         </div>
         <!-- 待生成按钮 - 仙侠风格小按钮 -->
-        <button v-else class="generate-image-btn-xiantu" @click="generateImage(part.content)" @mousedown="startLongPress($event, part.content)" @mouseup="cancelLongPress" @mouseleave="cancelLongPress" @touchstart.passive="startLongPress($event, part.content)" @touchend="cancelLongPress" @touchcancel="cancelLongPress">
+        <button v-else class="generate-image-btn-xiantu" @click="generateImage(part.content)" @mousedown="startLongPress($event, part.content)" @mouseup="cancelLongPress" @mouseleave="cancelLongPress" @touchstart.passive="startLongPress($event, part.content)" @touchmove.passive="handleTouchMove" @touchend="cancelLongPress" @touchcancel="cancelLongPress">
           <span class="btn-icon-xiantu">✦</span>
           <span class="btn-text-xiantu">生图</span>
         </button>
@@ -312,6 +313,8 @@ const editingMarker = ref<ImageMarkerData | null>(null)
 const longPressTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const longPressThreshold = 500 // 长按阈值 500ms
 const longPressTriggered = ref(false) // 标记长按是否真的完成触发
+const touchStartPos = ref<{ x: number; y: number } | null>(null) // 触摸开始位置
+const TOUCH_MOVE_THRESHOLD = 10 // 移动距离阈值（超过此距离视为滑动）
 
 // 保存当前预览的 marker（用于重新生成）
 const previewMarker = ref<ImageMarkerData | null>(null)
@@ -430,9 +433,9 @@ function closeImagePreview() {
   previewMarker.value = null
 }
 
-// 预览弹窗下载回调
+// 预览弹窗下载回调（toast已在ImagePreviewModal中显示，此处无需重复）
 function onPreviewDownload() {
-  toast.success('图片已下载')
+  // 下载成功的toast已在ImagePreviewModal中显示
 }
 
 // 预览弹窗重新生成回调
@@ -449,6 +452,14 @@ function startLongPress(event: MouseEvent | TouchEvent, marker: ImageMarkerData)
   // 阻止默认行为（移动端长按可能触发上下文菜单）
   if (event.type === 'touchstart') {
     // 不阻止默认行为，避免影响滚动
+    // 记录触摸开始位置
+    const touch = (event as TouchEvent).touches[0]
+    if (touch) {
+      touchStartPos.value = { x: touch.clientX, y: touch.clientY }
+    }
+  } else {
+    // 鼠标事件
+    touchStartPos.value = { x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY }
   }
 
   cancelLongPress()
@@ -463,12 +474,30 @@ function startLongPress(event: MouseEvent | TouchEvent, marker: ImageMarkerData)
   }, longPressThreshold)
 }
 
+// 处理触摸移动 - 检测是否为滑动
+function handleTouchMove(event: TouchEvent) {
+  if (!touchStartPos.value || !longPressTimer.value) return
+
+  const touch = event.touches[0]
+  if (!touch) return
+
+  const deltaX = Math.abs(touch.clientX - touchStartPos.value.x)
+  const deltaY = Math.abs(touch.clientY - touchStartPos.value.y)
+  const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+
+  // 如果移动距离超过阈值，取消长按（视为滑动）
+  if (distance > TOUCH_MOVE_THRESHOLD) {
+    cancelLongPress()
+  }
+}
+
 // 取消长按
 function cancelLongPress() {
   if (longPressTimer.value) {
     clearTimeout(longPressTimer.value)
     longPressTimer.value = null
   }
+  touchStartPos.value = null
 }
 
 // 打开 tag 编辑弹窗
@@ -890,7 +919,7 @@ const parsedText = computed(() => {
     for (const { tag, openTagPattern, closeTagPattern } of htmlTagPatterns) {
       const openRegex = new RegExp(openTagPattern, 'gi')
       let match
-      let searchPos = currentIndex
+      const searchPos = currentIndex
 
       while ((match = openRegex.exec(processedText)) !== null) {
         if (match.index < searchPos) continue
