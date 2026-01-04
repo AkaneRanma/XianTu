@@ -24,7 +24,7 @@ export default (env, argv) => {
       path: path.resolve(__dirname, 'dist'),
       filename: isWatch ? 'inline.js' : 'XianTu.js',
       clean: true,
-      publicPath: './', // 使用相对路径，便于部署
+      publicPath: isProduction ? './' : '/', // 生产环境使用相对路径，开发环境使用根路径
     },
     devtool: isProduction ? false : (isWatch ? false : 'eval-source-map'),
     optimization: {
@@ -152,6 +152,9 @@ export default (env, argv) => {
       compress: true,
       port: 8080,
       hot: true,
+      host: '0.0.0.0', // 绑定到所有网络接口，允许局域网访问
+      allowedHosts: 'all', // 允许所有主机连接
+      historyApiFallback: true, // 支持 SPA 路由
       // Novel AI CORS 代理（通过 Clash 代理）
       proxy: [
         {

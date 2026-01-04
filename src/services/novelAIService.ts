@@ -456,11 +456,11 @@ class NovelAIService {
 
   /**
    * 检测是否在开发服务器环境
+   * 当端口为 8080 时，无论是 localhost 还是局域网 IP 访问，都使用代理
    */
   private isDevServer(): boolean {
     return typeof window !== 'undefined' &&
-      window.location.port === '8080' &&
-      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      window.location.port === '8080'
   }
 
   /**
@@ -556,8 +556,8 @@ class NovelAIService {
     // 数据开始位置
     const dataStart = 30 + fileNameLength + extraFieldLength
 
-    let compressedSize: number
-    let uncompressedSize: number
+    let compressedSize: number = 0
+    let uncompressedSize: number = 0
 
     if (hasDataDescriptor) {
       // 需要查找中央目录来获取正确的大小
@@ -574,15 +574,22 @@ class NovelAIService {
       if (centralDirOffset === -1) {
         // 找不到中央目录，尝试查找数据描述符签名
         // 数据描述符可能有可选的签名 0x08074b50
+        let foundDescriptor = false
         for (let i = dataStart; i < bytes.length - 16; i++) {
           if (dataView.getUint32(i, true) === 0x08074b50) {
             compressedSize = dataView.getUint32(i + 8, true)
             uncompressedSize = dataView.getUint32(i + 12, true)
+            foundDescriptor = true
             break
           }
         }
         // 如果还是找不到，使用剩余所有数据
-        compressedSize = compressedSize! || (bytes.length - dataStart - 16)
+        if (!foundDescriptor || compressedSize <= 0) {
+          compressedSize = bytes.length - dataStart - 16
+          if (compressedSize <= 0) {
+            compressedSize = bytes.length - dataStart
+          }
+        }
       } else {
         // 从中央目录读取压缩大小
         compressedSize = dataView.getUint32(centralDirOffset + 20, true)
@@ -644,49 +651,71 @@ class NovelAIService {
    * 解压 Deflate 数据
    */
   private async inflateData(compressedData: Uint8Array): Promise<Uint8Array> {
-    // 使用 DecompressionStream API (现代浏览器支持)
-    const ds = new DecompressionStream('deflate-raw')
-    const writer = ds.writable.getWriter()
-    const reader = ds.readable.getReader()
-
-    // 创建一个新的 ArrayBuffer 副本以确保类型兼容
-    const buffer = new Uint8Array(compressedData).buffer as ArrayBuffer
-
-    // 写入数据并关闭
-    const writePromise = writer.write(new Uint8Array(buffer)).then(() => writer.close())
-
-    // 读取解压后的数据
-    const chunks: Uint8Array[] = []
-    let totalSize = 0
+    // 检查 DecompressionStream API 是否可用
+    if (typeof DecompressionStream === 'undefined') {
+      console.warn('[NovelAI] DecompressionStream 不支持，尝试使用 pako 回退或返回原始数据')
+      // 在不支持的浏览器中，尝试使用 pako 库（如果已加载）或返回原始数据
+      if (typeof (window as unknown as { pako?: { inflate: (data: Uint8Array) => Uint8Array } }).pako !== 'undefined') {
+        return (window as unknown as { pako: { inflate: (data: Uint8Array) => Uint8Array } }).pako.inflate(compressedData)
+      }
+      // 如果没有 pako，返回原始数据（可能未压缩）
+      return compressedData
+    }
 
     try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        chunks.push(value)
-        totalSize += value.length
+      // 使用 DecompressionStream API (现代浏览器支持)
+      const ds = new DecompressionStream('deflate-raw')
+      const writer = ds.writable.getWriter()
+      const reader = ds.readable.getReader()
+
+      // 创建一个新的 ArrayBuffer 副本以确保类型兼容
+      const buffer = new Uint8Array(compressedData).buffer as ArrayBuffer
+
+      // 写入数据并关闭
+      const writePromise = writer.write(new Uint8Array(buffer)).then(() => writer.close())
+
+      // 读取解压后的数据
+      const chunks: Uint8Array[] = []
+      let totalSize = 0
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+          totalSize += value.length
+        }
+      } catch (readError) {
+        // 确保writer已关闭
+        await writePromise.catch(() => {})
+        throw readError
       }
-    } catch (readError) {
-      // 确保writer已关闭
-      await writePromise.catch(() => {})
-      throw readError
-    }
 
-    // 合并所有块
-    const result = new Uint8Array(totalSize)
-    let offset = 0
-    for (const chunk of chunks) {
-      result.set(chunk, offset)
-      offset += chunk.length
-    }
+      // 合并所有块
+      const result = new Uint8Array(totalSize)
+      let offset = 0
+      for (const chunk of chunks) {
+        result.set(chunk, offset)
+        offset += chunk.length
+      }
 
-    return result
+      return result
+    } catch (error) {
+      console.error('[NovelAI] DecompressionStream 解压失败:', error)
+      // 解压失败时返回原始数据
+      return compressedData
+    }
   }
 
   /**
    * Uint8Array 转 Base64
    */
   private uint8ArrayToBase64(bytes: Uint8Array): string {
+    // 安全检查
+    if (!bytes || bytes.length === 0) {
+      console.warn('[NovelAI] 空数据，无法转换为 Base64')
+      return ''
+    }
     let binary = ''
     for (let i = 0; i < bytes.length; i++) {
       binary += String.fromCharCode(bytes[i])
@@ -698,6 +727,11 @@ class NovelAIService {
    * 检测图片类型
    */
   private detectImageType(data: Uint8Array): string {
+    // 安全检查：确保 data 存在且有足够的长度
+    if (!data || data.length < 4) {
+      console.warn('[NovelAI] 图片数据无效或过短，默认返回 PNG 类型')
+      return 'image/png'
+    }
     // PNG: 89 50 4E 47
     if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) {
       return 'image/png'
