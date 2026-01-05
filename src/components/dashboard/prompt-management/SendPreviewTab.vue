@@ -25,8 +25,8 @@
     <!-- 正常模式下的内容（非正文生成场景，或没有激活酒馆预设时显示） -->
     <template v-if="!hasTavernPreset || !isTextGenerationScenario">
 
-      <!-- 记忆配置 -->
-      <div class="memory-config">
+      <!-- 记忆配置 - 只在需要记忆的场景显示 -->
+      <div class="memory-config" v-if="showMemoryConfig">
       <div class="config-row">
         <label class="config-label">短期记忆条数</label>
         <div class="config-input">
@@ -253,7 +253,13 @@ const availableMemoryCount = computed(() => {
 
 // 是否显示用户输入框
 const showUserInput = computed(() => {
-  return ['text_generation', 'variable_generation', 'tavern_preset'].includes(selectedScenario.value);
+  return ['text_generation', 'variable_generation', 'tavern_preset', 'opening_text', 'opening_variable'].includes(selectedScenario.value);
+});
+
+// 是否显示记忆配置
+const showMemoryConfig = computed(() => {
+  // 正文优化、重新优化、开局正文、开局变量 不需要短期记忆配置
+  return !['text_optimization', 'text_optimization_reroll', 'opening_text', 'opening_variable'].includes(selectedScenario.value);
 });
 
 // 显示的消息列表（根据视图切换）

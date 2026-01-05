@@ -78,6 +78,18 @@ const scenarios: ScenarioOption[] = [
     description: '预览当前激活的酒馆预设构建的消息',
     icon: '🍺',
   },
+  {
+    value: 'opening_text',
+    label: '开局正文',
+    description: '开局第1步：只生成正文text的提示词（splitInitStep1）',
+    icon: '🌅',
+  },
+  {
+    value: 'opening_variable',
+    label: '开局变量',
+    description: '开局第2步：只生成JSON变量的提示词（splitInitStep2）',
+    icon: '🔧',
+  },
 ];
 
 const currentDescription = computed(() => {

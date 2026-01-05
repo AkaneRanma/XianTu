@@ -44,10 +44,12 @@ export type PreviewScenario =
   | 'variable_reroll'       // 重新生成变量
   | 'text_optimization'     // 正文优化
   | 'text_optimization_reroll' // 重新优化正文
-  | 'tavern_preset';        // 酒馆预设预览
+  | 'tavern_preset'         // 酒馆预设预览
+  | 'opening_text'          // 开局正文（第1步）
+  | 'opening_variable';     // 开局变量（第2步）
 
 // 世界书条目作用场景
-export type WorldBookTarget = 'text' | 'variable' | 'optimization';
+export type WorldBookTarget = 'text' | 'variable' | 'optimization' | 'opening_text' | 'opening_variable';
 
 export interface WorldBookEntry {
   id: string;
@@ -292,6 +294,8 @@ class PromptPreviewService {
       delete stateForAI.记忆.隐式中期记忆;
     }
     if (stateForAI.叙事历史) delete stateForAI.叙事历史;
+    // 移除优化正文历史（独立管理，不发送给 AI）
+    if (stateForAI.优化正文历史) delete stateForAI.优化正文历史;
 
     return JSON.stringify(stateForAI, null, 2);
   }
@@ -403,6 +407,10 @@ class PromptPreviewService {
         return this.generateTextOptimizationRerollPreview(options);
       case 'tavern_preset':
         return this.generateTavernPresetPreview(options);
+      case 'opening_text':
+        return this.generateOpeningTextPreview(options);
+      case 'opening_variable':
+        return this.generateOpeningVariablePreview(options);
       default:
         return { messages: [], totalCharCount: 0, estimatedTokens: 0 };
     }
@@ -529,6 +537,8 @@ ${stateJsonString}
       delete stateForAI.记忆.隐式中期记忆;
     }
     if (stateForAI?.叙事历史) delete stateForAI.叙事历史;
+    // 移除优化正文历史（独立管理，不发送给 AI）
+    if (stateForAI?.优化正文历史) delete stateForAI.优化正文历史;
     const stateJsonString = JSON.stringify(stateForAI);
 
     // 1. Step2系统提示词
@@ -628,6 +638,216 @@ ${step1Text}
 
   private async generateVariableRerollPreview(options?: PreviewOptions): Promise<PreviewResult> {
     return this.generateVariableRerollPreviewInternal(options);
+  }
+
+  // ==================== 开局正文预览（第1步） ====================
+
+  /**
+   * 开局正文预览（第1步）
+   * 不使用短期记忆，包含用户输入占位条目
+   */
+  private async generateOpeningTextPreview(options?: PreviewOptions): Promise<PreviewResult> {
+    const messages: PreviewMessage[] = [];
+    const uiStore = useUIStore();
+    const gameStateStore = useGameStateStore();
+
+    // 1. 获取开局分步系统提示词
+    const [
+      splitInitStep1,
+      coreOutputRulesPrompt,
+      businessRulesPrompt,
+      dataDefinitionsPrompt,
+      textFormatsPrompt,
+      worldStandardsPrompt,
+      characterInitPrompt
+    ] = await Promise.all([
+      getPrompt('splitInitStep1'),
+      getPrompt('coreOutputRules'),
+      getPrompt('businessRules'),
+      getPrompt('dataDefinitions'),
+      getPrompt('textFormatRules'),
+      getPrompt('worldStandards'),
+      getPrompt('characterInit')
+    ]);
+
+    // 2. 获取游戏状态（用于原始系统提示词）
+    const saveData = gameStateStore.toSaveData();
+    const stateForAI = cloneDeep(saveData);
+    if (stateForAI?.记忆) {
+      delete stateForAI.记忆.短期记忆;
+      delete stateForAI.记忆.隐式中期记忆;
+    }
+    if (stateForAI?.叙事历史) delete stateForAI.叙事历史;
+    if (stateForAI?.优化正文历史) delete stateForAI.优化正文历史;
+
+    // 3. 组装原始系统提示词
+    const sections: string[] = [
+      coreOutputRulesPrompt,
+      businessRulesPrompt,
+      dataDefinitionsPrompt,
+      textFormatsPrompt,
+      worldStandardsPrompt,
+      characterInitPrompt
+    ];
+
+    if (uiStore.enableActionOptions) {
+      const actionOptionsPrompt = await getPrompt('actionOptions');
+      const customPromptSection = uiStore.actionOptionsPrompt
+        ? `**用户自定义要求**：${uiStore.actionOptionsPrompt}\n\n请严格按以上要求生成行动选项。`
+        : '（无特殊要求，按默认规则生成）';
+      sections.push(actionOptionsPrompt.replace('{{CUSTOM_ACTION_PROMPT}}', customPromptSection));
+    }
+
+    const originalSystemPrompt = sections.join('\n\n---\n\n');
+
+    // 4. 组合成开局第1步系统提示词
+    const step1SystemPrompt = `
+${splitInitStep1.trim()}
+
+---
+
+# 原始系统提示词（供参考；若与本步目标冲突，以本步规则为准）
+${originalSystemPrompt}
+
+# 游戏状态（JSON）
+${JSON.stringify(stateForAI)}
+    `.trim();
+
+    messages.push(this.createMessage('system', step1SystemPrompt, '开局第1步系统提示词（splitInitStep1）', 4, 'opening_step1_system'));
+
+    // 5. 世界书条目（作用于开局正文）
+    const openingTextWorldBooks = this.getWorldBookEntriesForTarget('opening_text', '开局');
+    for (let i = 0; i < openingTextWorldBooks.length; i++) {
+      const entry = openingTextWorldBooks[i];
+      const triggerInfo = entry.triggerMode === 'keyword' ? ' 🟢' : ' 🔵';
+      messages.push(this.createMessage(
+        entry.role,
+        entry.content,
+        `世界书: ${entry.name}${triggerInfo}`,
+        entry.depth,
+        `world_book_opening_text_${i}`
+      ));
+    }
+
+    // 6. 用户开局设定占位条目
+    const userOpeningInput = options?.userInput || '（用户开局设定：角色名、世界选择、出身背景等将在此显示）';
+    messages.push(this.createMessage('user', userOpeningInput, '用户开局设定（占位）', 0, 'opening_user_input'));
+
+    // 7. 占位符
+    messages.push(this.createMessage('assistant', '</input>', '输入结束占位符', 0, 'input_end_marker'));
+
+    // 按depth排序（降序）
+    messages.sort((a, b) => b.depth - a.depth);
+
+    return this.calculateResult(messages);
+  }
+
+  // ==================== 开局变量预览（第2步） ====================
+
+  /**
+   * 开局变量预览（第2步）
+   * 不使用短期记忆，包含第1步正文占位条目
+   */
+  private async generateOpeningVariablePreview(options?: PreviewOptions): Promise<PreviewResult> {
+    const messages: PreviewMessage[] = [];
+    const uiStore = useUIStore();
+    const gameStateStore = useGameStateStore();
+
+    // 1. 获取开局分步第2步系统提示词
+    const [
+      splitInitStep2,
+      coreOutputRulesPrompt,
+      businessRulesPrompt,
+      dataDefinitionsPrompt,
+      textFormatsPrompt,
+      worldStandardsPrompt
+    ] = await Promise.all([
+      getPrompt('splitInitStep2'),
+      getPrompt('coreOutputRules'),
+      getPrompt('businessRules'),
+      getPrompt('dataDefinitions'),
+      getPrompt('textFormatRules'),
+      getPrompt('worldStandards')
+    ]);
+
+    // 2. 获取游戏状态
+    const saveData = gameStateStore.toSaveData();
+    const stateForAI = cloneDeep(saveData);
+    if (stateForAI?.记忆) {
+      delete stateForAI.记忆.短期记忆;
+      delete stateForAI.记忆.隐式中期记忆;
+    }
+    if (stateForAI?.叙事历史) delete stateForAI.叙事历史;
+    if (stateForAI?.优化正文历史) delete stateForAI.优化正文历史;
+
+    // 3. 组装开局第2步系统提示词
+    const sections: string[] = [
+      splitInitStep2.trim(),
+      coreOutputRulesPrompt,
+      businessRulesPrompt,
+      dataDefinitionsPrompt,
+      textFormatsPrompt,
+      worldStandardsPrompt
+    ];
+
+    if (uiStore.enableActionOptions) {
+      const actionOptionsPrompt = await getPrompt('actionOptions');
+      const customPromptSection = uiStore.actionOptionsPrompt
+        ? `**用户自定义要求**：${uiStore.actionOptionsPrompt}\n\n请严格按以上要求生成行动选项。`
+        : '（无特殊要求，按默认规则生成）';
+      sections.push(actionOptionsPrompt.replace('{{CUSTOM_ACTION_PROMPT}}', customPromptSection));
+    }
+
+    const step2SystemPrompt = `
+${sections.join('\n\n---\n\n')}
+
+# 游戏状态（JSON）
+${JSON.stringify(stateForAI)}
+    `.trim();
+
+    messages.push(this.createMessage('system', step2SystemPrompt, '开局第2步系统提示词（splitInitStep2）', 4, 'opening_step2_system'));
+
+    // 4. 世界书条目（作用于开局变量）
+    const openingVariableWorldBooks = this.getWorldBookEntriesForTarget('opening_variable', '开局');
+    for (let i = 0; i < openingVariableWorldBooks.length; i++) {
+      const entry = openingVariableWorldBooks[i];
+      const triggerInfo = entry.triggerMode === 'keyword' ? ' 🟢' : ' 🔵';
+      messages.push(this.createMessage(
+        entry.role,
+        entry.content,
+        `世界书: ${entry.name}${triggerInfo}`,
+        entry.depth,
+        `world_book_opening_variable_${i}`
+      ));
+    }
+
+    // 5. 用户输入（包含第1步结果占位）
+    const step1Text = options?.step1Text || '（第1步正文内容将在此显示）';
+    const step1Thinking = options?.step1Thinking || '（第1步思维链内容将在此显示）';
+    const userOpeningInput = options?.userInput || '（用户开局设定）';
+
+    const step2UserInput = `
+【用户开局设定】
+${userOpeningInput}
+
+【第1步思维链】
+${step1Thinking}
+
+【第1步正文】
+${step1Text}
+
+请按"分步生成（开局-第2步）"规则输出 JSON。
+    `.trim();
+
+    messages.push(this.createMessage('user', step2UserInput, '用户输入（含开局第1步结果占位）', 0, 'opening_step2_user_input'));
+
+    // 6. 占位符
+    messages.push(this.createMessage('assistant', '</input>', '输入结束占位符', 0, 'input_end_marker'));
+
+    // 按depth排序（降序）
+    messages.sort((a, b) => b.depth - a.depth);
+
+    return this.calculateResult(messages);
   }
 
   // ==================== 正文优化预览 ====================
@@ -1582,40 +1802,55 @@ ${step1Text}
 
   /**
    * 构建用户人设描述
+   * 优先使用用户在设置中配置的 personaDescription，否则使用默认内容
    */
   private buildPersonaDescription(characterInfo: any): string {
-    if (!characterInfo) return '';
+    // 🔥 优先从 localStorage 读取用户设置的 personaDescription
+    try {
+      const savedSettings = localStorage.getItem('dad_game_settings');
+      if (savedSettings) {
+        const settings = JSON.parse(savedSettings);
+        if (settings.personaDescription && settings.personaDescription.trim()) {
+          return settings.personaDescription.trim();
+        }
+      }
+    } catch (error) {
+      console.warn('[PromptPreviewService] 读取 personaDescription 设置失败:', error);
+    }
 
+    // 如果没有用户设置，返回默认内容
+    if (!characterInfo) return '';
     return `你正在扮演一位名为"${characterInfo.名字 || '修士'}"的修仙者。`;
   }
 
   /**
    * 构建场景设定
+   * 返回完整的游戏状态 JSON（与 Step2 变量生成一致）
    */
   private buildScenario(saveData: any): string {
     if (!saveData) return '';
 
-    const parts: string[] = [];
-
-    // 世界信息
-    const worldInfo = saveData.世界信息;
-    if (worldInfo) {
-      if (worldInfo.当前位置) parts.push(`当前位置: ${worldInfo.当前位置}`);
-      if (worldInfo.当前时间) parts.push(`当前时间: ${worldInfo.当前时间}`);
+    // 复制游戏状态，移除记忆和叙事历史（避免重复）
+    const stateForScenario = cloneDeep(saveData);
+    if (stateForScenario?.记忆) {
+      delete stateForScenario.记忆.短期记忆;
+      delete stateForScenario.记忆.隐式中期记忆;
+    }
+    if (stateForScenario?.叙事历史) {
+      delete stateForScenario.叙事历史;
+    }
+    // 移除优化正文历史（独立管理，不发送给 AI）
+    if (stateForScenario?.优化正文历史) {
+      delete stateForScenario.优化正文历史;
     }
 
-    // 背包简述
-    const inventory = saveData.背包;
-    if (inventory && Array.isArray(inventory) && inventory.length > 0) {
-      const itemNames = inventory.slice(0, 5).map((item: any) =>
-        typeof item === 'string' ? item : item.名称 || item.name
-      ).filter(Boolean);
-      if (itemNames.length > 0) {
-        parts.push(`携带物品: ${itemNames.join('、')}${inventory.length > 5 ? '等' : ''}`);
-      }
+    // 返回紧凑型 JSON（与 Step2 变量生成一致）
+    try {
+      return JSON.stringify(stateForScenario);
+    } catch (error) {
+      console.error('[PromptPreviewService] buildScenario JSON序列化失败:', error);
+      return '';
     }
-
-    return parts.join('\n');
   }
 
   private mapTavernRole(role?: string): 'system' | 'user' | 'assistant' {

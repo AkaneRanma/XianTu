@@ -198,33 +198,23 @@ export class TavernMacroProcessor {
     }
 
     // {{persona}} / {{personaDescription}} - 用户角色描述
-    if (context.personaDescription !== undefined) {
-      result = result.replace(/\{\{persona\}\}/gi, context.personaDescription || '')
-      result = result.replace(/\{\{personaDescription\}\}/gi, context.personaDescription || '')
-    }
+    result = result.replace(/\{\{persona\}\}/gi, context.personaDescription || '')
+    result = result.replace(/\{\{personaDescription\}\}/gi, context.personaDescription || '')
 
     // {{personality}} / {{charPersonality}} - 角色性格
-    if (context.charPersonality !== undefined) {
-      result = result.replace(/\{\{personality\}\}/gi, context.charPersonality || '')
-      result = result.replace(/\{\{charPersonality\}\}/gi, context.charPersonality || '')
-    }
+    result = result.replace(/\{\{personality\}\}/gi, context.charPersonality || '')
+    result = result.replace(/\{\{charPersonality\}\}/gi, context.charPersonality || '')
 
     // {{description}} / {{charDescription}} - 角色描述
-    if (context.charDescription !== undefined) {
-      result = result.replace(/\{\{description\}\}/gi, context.charDescription || '')
-      result = result.replace(/\{\{charDescription\}\}/gi, context.charDescription || '')
-    }
+    result = result.replace(/\{\{description\}\}/gi, context.charDescription || '')
+    result = result.replace(/\{\{charDescription\}\}/gi, context.charDescription || '')
 
-    // {{scenario}} - 场景
-    if (context.scenario !== undefined) {
-      result = result.replace(/\{\{scenario\}\}/gi, context.scenario || '')
-    }
+    // {{scenario}} - 场景/游戏状态
+    result = result.replace(/\{\{scenario\}\}/gi, context.scenario || '')
 
     // {{mesExamples}} / {{dialogueExamples}} - 对话示例
-    if (context.dialogueExamples !== undefined) {
-      result = result.replace(/\{\{mesExamples\}\}/gi, context.dialogueExamples || '')
-      result = result.replace(/\{\{dialogueExamples\}\}/gi, context.dialogueExamples || '')
-    }
+    result = result.replace(/\{\{mesExamples\}\}/gi, context.dialogueExamples || '')
+    result = result.replace(/\{\{dialogueExamples\}\}/gi, context.dialogueExamples || '')
 
     return result
   }

@@ -24,6 +24,7 @@ class TextOptimizationService {
   private currentPreset: TextOptimizationPreset | null = null;
   private enabled: boolean = false;
   private optimizedTextHistory: string[] = [];
+  private currentSaveId: string | null = null; // 当前存档ID
 
   constructor() {
     this.load();
@@ -452,14 +453,42 @@ class TextOptimizationService {
    */
   clearHistory(): void {
     this.optimizedTextHistory = [];
-    localStorage.removeItem(HISTORY_KEY);
+    // 不再保存到 localStorage，历史现在跟随存档
     console.log('[正文优化服务] 已清空优化正文历史');
   }
 
   /**
-   * 保存历史到localStorage
+   * 切换到指定存档的历史（存档加载时调用）
+   * @param saveId 存档ID
+   * @param history 该存档的历史数据
+   */
+  switchSave(saveId: string, history: string[] = []): void {
+    this.currentSaveId = saveId;
+    this.optimizedTextHistory = [...history]; // 深拷贝避免引用问题
+    console.log(`[正文优化服务] 切换到存档 ${saveId}，历史层数:`, this.optimizedTextHistory.length);
+  }
+
+  /**
+   * 获取当前历史数据（存档保存时调用）
+   * @returns 当前的优化历史数组
+   */
+  getCurrentHistory(): string[] {
+    return [...this.optimizedTextHistory]; // 返回副本避免外部修改
+  }
+
+  /**
+   * 获取当前存档ID
+   */
+  getCurrentSaveId(): string | null {
+    return this.currentSaveId;
+  }
+
+  /**
+   * 保存历史到localStorage（兼容旧逻辑，作为备份）
+   * 注意：主要的历史存储现在是存档级别的
    */
   private saveHistory(): void {
+    // 保留 localStorage 作为临时备份，但主要存储在存档中
     try {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(this.optimizedTextHistory));
     } catch (e) {
@@ -468,19 +497,46 @@ class TextOptimizationService {
   }
 
   /**
-   * 从localStorage加载历史
+   * 从localStorage加载历史（仅在没有存档数据时使用）
    */
   private loadHistory(): void {
+    // 如果已有存档数据，不从 localStorage 加载
+    if (this.currentSaveId && this.optimizedTextHistory.length > 0) {
+      return;
+    }
+
     try {
       const saved = localStorage.getItem(HISTORY_KEY);
       if (saved) {
         this.optimizedTextHistory = JSON.parse(saved);
-        console.log('[正文优化服务] 已加载优化历史，层数:', this.optimizedTextHistory.length);
+        console.log('[正文优化服务] 从localStorage加载优化历史，层数:', this.optimizedTextHistory.length);
       }
     } catch (e) {
       console.warn('[正文优化服务] 加载优化历史失败:', e);
       this.optimizedTextHistory = [];
     }
+  }
+
+  /**
+   * 迁移旧的localStorage历史到当前存档
+   * @returns 迁移的历史数组，如果没有则返回空数组
+   */
+  migrateFromLocalStorage(): string[] {
+    try {
+      const saved = localStorage.getItem(HISTORY_KEY);
+      if (saved) {
+        const history = JSON.parse(saved);
+        if (Array.isArray(history) && history.length > 0) {
+          console.log('[正文优化服务] 迁移旧历史数据，层数:', history.length);
+          // 迁移后清除旧数据
+          localStorage.removeItem(HISTORY_KEY);
+          return history;
+        }
+      }
+    } catch (e) {
+      console.warn('[正文优化服务] 迁移旧历史失败:', e);
+    }
+    return [];
   }
 
   /**

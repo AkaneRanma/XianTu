@@ -744,12 +744,24 @@ const generateStableMarkerId = (tags: string, _position?: number) => {
   return `img_${Math.abs(hash).toString(36)}`
 }
 
+// 防止重复调用的标记
+const restoringCache = new Set<string>()
+
 // 从缓存恢复图片状态
 async function tryRestoreFromCache(marker: ImageMarkerData) {
   const id = marker.id
 
   // 如果已经有状态（正在加载或已加载），跳过
-  if (novelAIStore.getImageState(id)) return
+  if (novelAIStore.getImageState(id)) {
+    // 不输出日志，避免刷屏
+    return
+  }
+
+  // 防止同一个 ID 并发调用
+  if (restoringCache.has(id)) {
+    return
+  }
+  restoringCache.add(id)
 
   try {
     // 方案 A：优先使用 markerId 查找（最可靠）
@@ -812,14 +824,25 @@ async function tryRestoreFromCache(marker: ImageMarkerData) {
       }
     }
 
-    // 没有找到任何缓存
+    // 没有找到任何缓存（只输出一次）
     console.log(`[NovelAI] 未找到缓存: ${id}`)
   } catch (e) {
     console.warn('[NovelAI] 缓存恢复失败:', e)
+  } finally {
+    // 移除标记，允许后续重试
+    restoringCache.delete(id)
   }
 }
 
+// 调试计数器
+let parseCount = 0
+
 const parsedText = computed(() => {
+  parseCount++
+  if (parseCount % 10 === 1) {
+    console.log(`[FormattedText] parsedText computed 第 ${parseCount} 次计算`)
+  }
+
   const parts: TextPart[] = []
   const text = props.text || ''
 

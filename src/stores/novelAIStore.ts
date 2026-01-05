@@ -208,6 +208,7 @@ export const useNovelAIStore = defineStore('novelAI', () => {
    * 开始生成（注册生成任务）
    */
   function startGeneration(markerId: string) {
+    console.log('[novelAIStore] startGeneration 调用:', markerId, '当前活跃:', activeGenerations.value.size);
     activeGenerations.value.add(markerId);
     isGenerating.value = true;
     // 设置加载状态
@@ -216,24 +217,26 @@ export const useNovelAIStore = defineStore('novelAI', () => {
       imageData: null,
       error: null
     };
-    console.log('[novelAIStore] 开始生成:', markerId);
+    console.log('[novelAIStore] 开始生成:', markerId, '状态已设置为 loading');
   }
 
   /**
    * 完成生成（注销生成任务）
    */
   function completeGeneration(markerId: string, success: boolean, data?: string, error?: string) {
+    console.log('[novelAIStore] completeGeneration 调用:', markerId, 'success:', success, 'hasData:', !!data, 'error:', error);
     activeGenerations.value.delete(markerId);
     if (activeGenerations.value.size === 0) {
       isGenerating.value = false;
     }
     // 更新状态
-    imageStates.value[markerId] = {
+    const newState = {
       loading: false,
       imageData: success ? (data || null) : null,
       error: success ? null : (error || '生成失败')
     };
-    console.log('[novelAIStore] 完成生成:', markerId, success ? '成功' : '失败');
+    imageStates.value[markerId] = newState;
+    console.log('[novelAIStore] 完成生成:', markerId, success ? '成功' : '失败', '新状态:', JSON.stringify({ loading: newState.loading, hasImage: !!newState.imageData, error: newState.error }));
   }
 
   /**

@@ -210,6 +210,18 @@ class AIBidirectionalSystemClass {
         // 🔥 酒馆预设模式：使用预设的提示词完全替代原有系统提示词
         console.log('[AI双向系统] 检测到激活的酒馆预设:', activePreset.name);
 
+        // 🔥 从设置中读取 personaDescription
+        let personaDescription = '';
+        try {
+          const settingsStr = localStorage.getItem('dad_game_settings');
+          if (settingsStr) {
+            const settings = JSON.parse(settingsStr);
+            personaDescription = settings.personaDescription || '';
+          }
+        } catch (e) {
+          console.warn('[AI双向系统] 读取 personaDescription 设置失败:', e);
+        }
+
         // 构建宏上下文
         const macroContext: MacroContext = tavernPresetService.createMacroContext({
           user: character?.名字 || stateForAI.角色基础信息?.名字 || '修仙者',
@@ -220,6 +232,8 @@ class AIBidirectionalSystemClass {
           scenario: `${coreStatusSummary}\n\n# 游戏状态\n你正在修仙世界《仙途》中扮演GM。以下是当前完整游戏存档(JSON格式):\n${stateJsonString}`,
           // 短期记忆作为聊天历史
           chatHistory: shortTermMemory.map(m => ({ role: 'assistant', content: m })),
+          // 🔥 Persona Description 占位符
+          personaDescription: personaDescription,
         });
 
         // 使用酒馆预设构建消息

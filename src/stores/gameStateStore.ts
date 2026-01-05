@@ -17,6 +17,7 @@ import type {
 import { calculateFinalAttributes } from '@/utils/attributeCalculation';
 import { isTavernEnv } from '@/utils/tavern';
 import { ensureSystemConfigHasNsfw } from '@/utils/nsfw';
+import { textOptimizationService } from '@/services/textOptimizationService';
 
 // 定义各个模块的接口
 interface GameState {
@@ -43,6 +44,9 @@ interface GameState {
   systemConfig: any | null;
   // 身体部位开发
   bodyPartDevelopment: Record<string, any> | null;
+
+  // 优化正文历史
+  textOptimizationHistory: string[] | null;
 
   // 时间点存档配置
   timeBasedSaveEnabled: boolean; // 是否启用时间点存档
@@ -86,6 +90,7 @@ export const useGameStateStore = defineStore('gameState', {
     masteredSkills: null,
     systemConfig: null,
     bodyPartDevelopment: null,
+    textOptimizationHistory: null,
 
     // 时间点存档配置（默认关闭，用户可在设置中开启）
     timeBasedSaveEnabled: false,
@@ -223,6 +228,25 @@ export const useGameStateStore = defineStore('gameState', {
       }
       this.bodyPartDevelopment = saveData.身体部位开发 ? JSON.parse(JSON.stringify(saveData.身体部位开发)) : null;
 
+      // 加载优化正文历史并同步到 textOptimizationService
+      this.textOptimizationHistory = saveData.优化正文历史 ? [...saveData.优化正文历史] : [];
+
+      // 生成存档标识用于 textOptimizationService
+      const saveId = `${saveData.角色基础信息?.名字 || 'unknown'}_${Date.now()}`;
+
+      // 检查是否需要从 localStorage 迁移旧数据
+      let historyToLoad = this.textOptimizationHistory;
+      if (historyToLoad.length === 0) {
+        const migratedHistory = textOptimizationService.migrateFromLocalStorage();
+        if (migratedHistory.length > 0) {
+          historyToLoad = migratedHistory;
+          this.textOptimizationHistory = migratedHistory;
+          console.log('[GameState] 已从 localStorage 迁移优化正文历史');
+        }
+      }
+
+      textOptimizationService.switchSave(saveId, historyToLoad);
+
       this.isGameLoaded = true;
     },
 
@@ -279,10 +303,14 @@ export const useGameStateStore = defineStore('gameState', {
 
         console.log('[toSaveData] 计算后的后天六司:', calculatedAttrs.后天六司);
 
+        // 获取最新的优化正文历史
+        const currentTextOptimizationHistory = textOptimizationService.getCurrentHistory();
+
         // 🔥 使用深拷贝确保返回的数据是独立的，防止引用污染
         return JSON.parse(JSON.stringify({
           ...tempSaveData,
-          角色基础信息: updatedCharacter
+          角色基础信息: updatedCharacter,
+          优化正文历史: currentTextOptimizationHistory
         }));
       } catch (error) {
         console.error('[toSaveData] 计算后天六司失败:', error);
@@ -396,6 +424,10 @@ export const useGameStateStore = defineStore('gameState', {
       this.masteredSkills = null;
       this.systemConfig = null;
       this.bodyPartDevelopment = null;
+      this.textOptimizationHistory = null;
+
+      // 清空 textOptimizationService 的历史
+      textOptimizationService.clearHistory();
 
       console.log('[GameState] State has been reset');
     },

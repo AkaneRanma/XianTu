@@ -3,9 +3,12 @@
  * 用于一键导出/导入所有提示词相关设置
  */
 
-import { promptPreviewService, type WorldBookEntry, type ShortTermMemoryConfig } from './promptPreviewService';
+import { promptPreviewService, type WorldBookEntry, type ShortTermMemoryConfig, type PreviewScenario } from './promptPreviewService';
 import { textOptimizationService } from './textOptimizationService';
+import { tavernPresetService } from './tavernPresetService';
+import { promptOrderService } from './promptOrderService';
 import type { TextOptimizationEntry } from '@/types/textOptimization';
+import type { LocalTavernPreset } from '@/types/tavernPreset';
 
 // ==================== 类型定义 ====================
 
@@ -16,17 +19,23 @@ export interface GlobalSettings {
   worldBookEntries: WorldBookEntry[];
   textOptimizationEntries: TextOptimizationEntry[];
   customPrompts?: Record<string, string>;
+  // 酒馆预设
+  tavernPresets?: LocalTavernPreset[];
+  activeTavernPresetId?: string | null;
+  // 消息序列自定义顺序（按场景存储）
+  promptOrders?: Record<string, string[]>;
 }
 
 // ==================== 服务实现 ====================
 
 class GlobalSettingsService {
-  private readonly CURRENT_VERSION = '1.0';
+  private readonly CURRENT_VERSION = '1.2'; // 升级版本号以支持消息序列顺序
+  private readonly PROMPT_ORDER_STORAGE_KEY = 'dad_prompt_order_v2';
 
   /**
-   * 导出所有设置
+   * 导出所有设置（异步，因为需要从IndexedDB读取酒馆预设）
    */
-  public exportAllSettings(): string {
+  public async exportAllSettings(): Promise<string> {
     const settings: GlobalSettings = {
       version: this.CURRENT_VERSION,
       exportedAt: new Date().toISOString(),
@@ -53,25 +62,58 @@ class GlobalSettingsService {
       settings.customPrompts = customPrompts;
     }
 
+    // 导出酒馆预设（从IndexedDB）
+    try {
+      await tavernPresetService.init();
+      const tavernPresets = await tavernPresetService.getAllPresets();
+      const activeTavernPresetId = await tavernPresetService.getActivePresetId();
+
+      if (tavernPresets.length > 0) {
+        settings.tavernPresets = tavernPresets;
+        settings.activeTavernPresetId = activeTavernPresetId;
+        console.log(`[GlobalSettingsService] 导出 ${tavernPresets.length} 个酒馆预设`);
+      }
+    } catch (error) {
+      console.error('[GlobalSettingsService] 导出酒馆预设失败:', error);
+    }
+
+    // 导出消息序列自定义顺序
+    try {
+      const savedOrders = localStorage.getItem(this.PROMPT_ORDER_STORAGE_KEY);
+      if (savedOrders) {
+        const orders = JSON.parse(savedOrders) as Record<string, string[]>;
+        if (Object.keys(orders).length > 0) {
+          settings.promptOrders = orders;
+          console.log(`[GlobalSettingsService] 导出 ${Object.keys(orders).length} 个场景的消息序列顺序`);
+        }
+      }
+    } catch (error) {
+      console.error('[GlobalSettingsService] 导出消息序列顺序失败:', error);
+    }
+
     return JSON.stringify(settings, null, 2);
   }
 
   /**
-   * 导入所有设置
+   * 导入所有设置（异步，因为需要写入IndexedDB）
    */
-  public importAllSettings(data: string, options?: {
+  public async importAllSettings(data: string, options?: {
     overwrite?: boolean;
     skipMemoryConfig?: boolean;
     skipWorldBook?: boolean;
     skipTextOptimization?: boolean;
     skipCustomPrompts?: boolean;
-  }): ImportResult {
+    skipTavernPresets?: boolean;
+    skipPromptOrders?: boolean;
+  }): Promise<ImportResult> {
     const result: ImportResult = {
       success: true,
       memoryConfigImported: false,
       worldBookEntriesCount: 0,
       textOptimizationEntriesCount: 0,
       customPromptsCount: 0,
+      tavernPresetsCount: 0,
+      promptOrdersCount: 0,
       errors: [],
     };
 
@@ -141,6 +183,73 @@ class GlobalSettingsService {
         }
       }
 
+      // 导入酒馆预设（写入IndexedDB）
+      if (!options?.skipTavernPresets && settings.tavernPresets && settings.tavernPresets.length > 0) {
+        try {
+          await tavernPresetService.init();
+
+          if (options?.overwrite) {
+            // 覆盖模式：先删除所有现有预设
+            const existingPresets = await tavernPresetService.getAllPresets();
+            for (const preset of existingPresets) {
+              await tavernPresetService.deletePreset(preset.id);
+            }
+          }
+
+          // 导入预设
+          for (const preset of settings.tavernPresets) {
+            // 检查是否已存在同ID的预设
+            const existing = await tavernPresetService.getPreset(preset.id);
+            if (existing && !options?.overwrite) {
+              // 合并模式下跳过已存在的预设
+              continue;
+            }
+            await tavernPresetService.savePreset(preset);
+            result.tavernPresetsCount++;
+          }
+
+          // 恢复激活状态
+          if (settings.activeTavernPresetId) {
+            const activePreset = await tavernPresetService.getPreset(settings.activeTavernPresetId);
+            if (activePreset) {
+              await tavernPresetService.setActivePreset(settings.activeTavernPresetId);
+            }
+          }
+
+          console.log(`[GlobalSettingsService] 导入 ${result.tavernPresetsCount} 个酒馆预设`);
+        } catch (error) {
+          result.errors.push(`导入酒馆预设失败: ${error}`);
+        }
+      }
+
+      // 导入消息序列自定义顺序
+      if (!options?.skipPromptOrders && settings.promptOrders) {
+        try {
+          if (options?.overwrite) {
+            // 覆盖模式：直接替换
+            localStorage.setItem(this.PROMPT_ORDER_STORAGE_KEY, JSON.stringify(settings.promptOrders));
+            result.promptOrdersCount = Object.keys(settings.promptOrders).length;
+          } else {
+            // 合并模式：合并现有顺序
+            const existingData = localStorage.getItem(this.PROMPT_ORDER_STORAGE_KEY);
+            const existingOrders: Record<string, string[]> = existingData ? JSON.parse(existingData) : {};
+
+            for (const [scenario, order] of Object.entries(settings.promptOrders)) {
+              // 只导入不存在的场景顺序
+              if (!existingOrders[scenario]) {
+                existingOrders[scenario] = order;
+                result.promptOrdersCount++;
+              }
+            }
+
+            localStorage.setItem(this.PROMPT_ORDER_STORAGE_KEY, JSON.stringify(existingOrders));
+          }
+          console.log(`[GlobalSettingsService] 导入 ${result.promptOrdersCount} 个场景的消息序列顺序`);
+        } catch (error) {
+          result.errors.push(`导入消息序列顺序失败: ${error}`);
+        }
+      }
+
       if (result.errors.length > 0) {
         result.success = false;
       }
@@ -181,13 +290,16 @@ class GlobalSettingsService {
     for (const key of customPromptKeys) {
       localStorage.removeItem(key);
     }
+
+    // 清除消息序列顺序
+    promptOrderService.clearAllOrders();
   }
 
   /**
-   * 下载设置文件
+   * 下载设置文件（异步）
    */
-  public downloadSettings(filename?: string): void {
-    const data = this.exportAllSettings();
+  public async downloadSettings(filename?: string): Promise<void> {
+    const data = await this.exportAllSettings();
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
 
@@ -209,13 +321,15 @@ class GlobalSettingsService {
     skipWorldBook?: boolean;
     skipTextOptimization?: boolean;
     skipCustomPrompts?: boolean;
+    skipTavernPresets?: boolean;
+    skipPromptOrders?: boolean;
   }): Promise<ImportResult> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
           const data = e.target?.result as string;
-          const result = this.importAllSettings(data, options);
+          const result = await this.importAllSettings(data, options);
           resolve(result);
         } catch (error) {
           reject(error);
@@ -225,6 +339,21 @@ class GlobalSettingsService {
       reader.readAsText(file);
     });
   }
+
+  /**
+   * 获取酒馆预设统计信息
+   */
+  public async getTavernPresetStats(): Promise<{ count: number; activeId: string | null }> {
+    try {
+      await tavernPresetService.init();
+      const presets = await tavernPresetService.getAllPresets();
+      const activeId = await tavernPresetService.getActivePresetId();
+      return { count: presets.length, activeId };
+    } catch (error) {
+      console.error('[GlobalSettingsService] 获取酒馆预设统计失败:', error);
+      return { count: 0, activeId: null };
+    }
+  }
 }
 
 export interface ImportResult {
@@ -233,6 +362,8 @@ export interface ImportResult {
   worldBookEntriesCount: number;
   textOptimizationEntriesCount: number;
   customPromptsCount: number;
+  tavernPresetsCount: number;
+  promptOrdersCount: number;
   errors: string[];
 }
 

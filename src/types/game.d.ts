@@ -835,6 +835,7 @@ export interface GameMessage {
       系统?: SystemConfig; // 可选：系统规则/提示（嵌入到存储结构中）
       叙事历史?: GameMessage[]; // 存储对话历史及其状态变更日志
       身体部位开发?: Record<string, PlayerBodyPart>; // 可选：身体部位开发
+      优化正文历史?: string[]; // 可选：正文优化历史（存档级别存储）
     }
 
 

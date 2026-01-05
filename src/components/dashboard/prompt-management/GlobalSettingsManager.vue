@@ -5,7 +5,7 @@
     </div>
 
     <p class="section-description">
-      一键导出或导入所有提示词相关设置，包括记忆配置、世界书条目和正文优化条目。
+      一键导出或导入所有提示词相关设置，包括记忆配置、世界书条目、正文优化条目和酒馆预设。
     </p>
 
     <div class="actions-grid">
@@ -83,6 +83,14 @@
               <input type="checkbox" v-model="importOptions.skipTextOptimization" />
               <span>跳过正文优化条目</span>
             </label>
+            <label class="option-item">
+              <input type="checkbox" v-model="importOptions.skipTavernPresets" />
+              <span>跳过酒馆预设</span>
+            </label>
+            <label class="option-item">
+              <input type="checkbox" v-model="importOptions.skipPromptOrders" />
+              <span>跳过消息序列顺序</span>
+            </label>
           </div>
         </div>
         <div class="modal-footer">
@@ -96,8 +104,8 @@
     <div class="stats-section">
       <div class="section-header">
         <span class="section-title">当前配置统计</span>
-        <button class="refresh-btn" @click="loadStats">
-          <svg viewBox="0 0 24 24" width="14" height="14">
+        <button class="refresh-btn" @click="loadStats" :disabled="isLoadingStats">
+          <svg viewBox="0 0 24 24" width="14" height="14" :class="{ 'spin': isLoadingStats }">
             <path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
           </svg>
         </button>
@@ -114,6 +122,11 @@
         <div class="stat-card">
           <span class="stat-value">{{ stats.shortTermMemoryCount }}</span>
           <span class="stat-label">短期记忆</span>
+        </div>
+        <div class="stat-card tavern">
+          <span class="stat-value">{{ stats.tavernPresetsCount }}</span>
+          <span class="stat-label">酒馆预设</span>
+          <span v-if="stats.tavernActivePresetId" class="stat-active">已激活</span>
         </div>
       </div>
     </div>
@@ -137,19 +150,38 @@ const importOptions = reactive({
   skipMemoryConfig: false,
   skipWorldBook: false,
   skipTextOptimization: false,
+  skipTavernPresets: false,
+  skipPromptOrders: false,
 });
 
 const stats = reactive({
   worldBookCount: 0,
   textOptimizationCount: 0,
   shortTermMemoryCount: 0,
+  tavernPresetsCount: 0,
+  tavernActivePresetId: null as string | null,
 });
 
-// 加载统计信息
-const loadStats = () => {
-  stats.worldBookCount = promptPreviewService.getWorldBookEntries().length;
-  stats.textOptimizationCount = textOptimizationService.getEntries().length;
-  stats.shortTermMemoryCount = promptPreviewService.getShortTermMemories().length;
+const isLoadingStats = ref(false);
+const isExporting = ref(false);
+
+// 加载统计信息（异步）
+const loadStats = async () => {
+  isLoadingStats.value = true;
+  try {
+    stats.worldBookCount = promptPreviewService.getWorldBookEntries().length;
+    stats.textOptimizationCount = textOptimizationService.getEntries().length;
+    stats.shortTermMemoryCount = promptPreviewService.getShortTermMemories().length;
+
+    // 加载酒馆预设统计（异步）
+    const tavernStats = await globalSettingsService.getTavernPresetStats();
+    stats.tavernPresetsCount = tavernStats.count;
+    stats.tavernActivePresetId = tavernStats.activeId;
+  } catch (error) {
+    console.error('[GlobalSettingsManager] 加载统计失败:', error);
+  } finally {
+    isLoadingStats.value = false;
+  }
 };
 
 // 格式化文件大小
@@ -159,10 +191,18 @@ const formatFileSize = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-// 导出设置
-const exportSettings = () => {
-  globalSettingsService.downloadSettings();
-  toast.success('设置已导出');
+// 导出设置（异步）
+const exportSettings = async () => {
+  if (isExporting.value) return;
+  isExporting.value = true;
+  try {
+    await globalSettingsService.downloadSettings();
+    toast.success('设置已导出');
+  } catch (error) {
+    toast.error('导出失败: ' + (error instanceof Error ? error.message : '未知错误'));
+  } finally {
+    isExporting.value = false;
+  }
 };
 
 // 触发导入
@@ -197,6 +237,8 @@ const doImport = async () => {
         skipMemoryConfig: importOptions.skipMemoryConfig,
         skipWorldBook: importOptions.skipWorldBook,
         skipTextOptimization: importOptions.skipTextOptimization,
+        skipTavernPresets: importOptions.skipTavernPresets,
+        skipPromptOrders: importOptions.skipPromptOrders,
       }
     );
 
@@ -209,9 +251,11 @@ const doImport = async () => {
       if (result.memoryConfigImported) parts.push('记忆配置');
       if (result.worldBookEntriesCount > 0) parts.push(`${result.worldBookEntriesCount}个世界书条目`);
       if (result.textOptimizationEntriesCount > 0) parts.push(`${result.textOptimizationEntriesCount}个优化条目`);
+      if (result.tavernPresetsCount > 0) parts.push(`${result.tavernPresetsCount}个酒馆预设`);
+      if (result.promptOrdersCount > 0) parts.push(`${result.promptOrdersCount}个消息序列顺序`);
       if (parts.length > 0) message = `已导入: ${parts.join(', ')}`;
       toast.success(message);
-      loadStats();
+      await loadStats();
     } else {
       toast.error('导入失败: ' + result.errors.join('; '));
     }
@@ -221,16 +265,16 @@ const doImport = async () => {
 };
 
 // 重置设置
-const resetSettings = () => {
+const resetSettings = async () => {
   if (confirm('确定要重置所有设置吗？此操作不可撤销。')) {
     globalSettingsService.resetAllSettings();
-    loadStats();
+    await loadStats();
     toast.success('设置已重置');
   }
 };
 
-onMounted(() => {
-  loadStats();
+onMounted(async () => {
+  await loadStats();
 });
 </script>
 
@@ -402,6 +446,38 @@ onMounted(() => {
 .stat-label {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.stat-card.tavern {
+  position: relative;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.stat-active {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 9px;
+  padding: 2px 4px;
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 3px;
+  color: #10b981;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refresh-btn svg.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* 导入选项对话框 */

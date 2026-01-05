@@ -224,6 +224,22 @@
             </div>
           </div>
 
+          <!-- Persona Description 设置（酒馆预设占位符） -->
+          <div class="setting-item setting-item-full">
+            <div class="setting-info">
+              <label class="setting-name">{{ t('Persona Description') }}</label>
+              <span class="setting-desc">{{ t('酒馆预设中 personaDescription 占位符的内容（用于描述玩家角色）') }}</span>
+            </div>
+            <div class="setting-control-full">
+              <textarea
+                v-model="settings.personaDescription"
+                class="setting-textarea"
+                :placeholder="t('例如：一位来自凡间的年轻修士，性格沉稳内敛，对修仙之道充满向往...')"
+                rows="4"
+              ></textarea>
+            </div>
+          </div>
+
           <div v-if="isTavernEnvFlag" class="setting-item">
             <div class="setting-info">
               <label class="setting-name">{{ t('AI模式') }}</label>
@@ -884,6 +900,9 @@ const settings = reactive({
   consoleDebug: false,
   performanceMonitor: false,
   replaceRules: [] as TextReplaceRule[],
+
+  // 酒馆预设相关
+  personaDescription: '', // Persona Description 占位符内容
 
   // 任务系统相关设置
   questSystemType: '修仙辅助系统', // 系统任务类型

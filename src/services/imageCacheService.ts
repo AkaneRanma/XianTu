@@ -62,20 +62,28 @@ class ImageCacheService {
    */
   async init(): Promise<void> {
     // 避免重复初始化
-    if (this.db) return
-    if (this.initPromise) return this.initPromise
+    if (this.db) {
+      console.log('[ImageCache] 数据库已存在，跳过初始化')
+      return
+    }
+    if (this.initPromise) {
+      console.log('[ImageCache] 初始化正在进行中，等待完成...')
+      return this.initPromise
+    }
 
+    console.log('[ImageCache] 开始初始化数据库...')
     this.initPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION)
 
       request.onerror = () => {
         console.error('[ImageCache] 数据库打开失败:', request.error)
+        this.initPromise = null  // 重置以允许重试
         reject(request.error)
       }
 
       request.onsuccess = () => {
         this.db = request.result
-        console.log('[ImageCache] 数据库已打开')
+        console.log('[ImageCache] 数据库已打开成功')
         resolve()
       }
 
@@ -546,26 +554,42 @@ class ImageCacheService {
    * 获取所有缓存条目
    */
   async getAllEntries(): Promise<ImageCacheEntry[]> {
-    const db = await this.ensureDB()
+    console.log('[ImageCache] getAllEntries: 开始获取所有缓存条目...')
 
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readonly')
-      const store = transaction.objectStore(STORE_NAME)
-      const request = store.getAll()
+    try {
+      const db = await this.ensureDB()
+      console.log('[ImageCache] getAllEntries: 数据库连接成功')
 
-      request.onerror = () => {
-        console.error('[ImageCache] 获取所有缓存条目失败:', request.error)
-        reject(request.error)
-      }
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, 'readonly')
+        const store = transaction.objectStore(STORE_NAME)
+        const request = store.getAll()
 
-      request.onsuccess = () => {
-        const entries = request.result as ImageCacheEntry[]
-        // 按创建时间倒序排列，最新的在前面
-        entries.sort((a, b) => b.createdAt - a.createdAt)
-        console.log(`[ImageCache] 获取到 ${entries.length} 个缓存条目`)
-        resolve(entries)
-      }
-    })
+        // 添加事务完成/错误监听
+        transaction.oncomplete = () => {
+          console.log('[ImageCache] getAllEntries: 事务完成')
+        }
+        transaction.onerror = () => {
+          console.error('[ImageCache] getAllEntries: 事务错误:', transaction.error)
+        }
+
+        request.onerror = () => {
+          console.error('[ImageCache] 获取所有缓存条目失败:', request.error)
+          reject(request.error)
+        }
+
+        request.onsuccess = () => {
+          const entries = request.result as ImageCacheEntry[]
+          // 按创建时间倒序排列，最新的在前面
+          entries.sort((a, b) => b.createdAt - a.createdAt)
+          console.log(`[ImageCache] getAllEntries: 成功获取 ${entries.length} 个缓存条目`)
+          resolve(entries)
+        }
+      })
+    } catch (error) {
+      console.error('[ImageCache] getAllEntries: 获取失败:', error)
+      throw error
+    }
   }
 
   /**

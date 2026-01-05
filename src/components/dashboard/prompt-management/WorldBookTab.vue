@@ -112,6 +112,14 @@
                 <input type="checkbox" :checked="entry.targets.includes('optimization')" @change="toggleTarget(entry, 'optimization')" />
                 <span>正文优化</span>
               </label>
+              <label class="target-checkbox">
+                <input type="checkbox" :checked="entry.targets.includes('opening_text')" @change="toggleTarget(entry, 'opening_text')" />
+                <span>开局正文</span>
+              </label>
+              <label class="target-checkbox">
+                <input type="checkbox" :checked="entry.targets.includes('opening_variable')" @change="toggleTarget(entry, 'opening_variable')" />
+                <span>开局变量</span>
+              </label>
             </div>
           </div>
           <div class="edit-row content-row">
@@ -316,6 +324,8 @@ const getTargetLabel = (target: WorldBookTarget): string => {
     case 'text': return '正文';
     case 'variable': return '变量';
     case 'optimization': return '优化';
+    case 'opening_text': return '开局正文';
+    case 'opening_variable': return '开局变量';
     default: return target;
   }
 };
@@ -725,6 +735,7 @@ onUnmounted(() => {
 .target-checkboxes {
   display: flex;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .target-checkbox {

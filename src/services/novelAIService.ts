@@ -226,11 +226,15 @@ class NovelAIService {
    * 生成图像
    */
   async generateImage(request: NovelAIGenerateRequest): Promise<NovelAIGenerateResponse> {
+    console.log('[NovelAI] generateImage 开始, markerId:', request.markerId, 'tags:', request.tags?.substring(0, 50));
+
     if (!this.config.enabled) {
+      console.log('[NovelAI] generateImage: 功能未启用');
       return { success: false, error: '图像生成功能未启用' }
     }
 
     if (!this.config.apiKey) {
+      console.log('[NovelAI] generateImage: 未配置 API Key');
       return { success: false, error: '请先配置 API Key' }
     }
 
@@ -294,7 +298,9 @@ class NovelAIService {
       )
 
       // 调用 API
+      console.log('[NovelAI] generateImage: 开始调用 API...');
       const imageBase64 = await this.callAPI(apiRequest)
+      console.log('[NovelAI] generateImage: API 返回, 数据长度:', imageBase64?.length || 0);
 
       // 存入缓存
       if (imageBase64) {
@@ -317,6 +323,7 @@ class NovelAIService {
         })
       }
 
+      console.log('[NovelAI] generateImage: 成功完成, seed:', actualSeed);
       return {
         success: true,
         imageBase64,
@@ -324,7 +331,7 @@ class NovelAIService {
         fromCache: false
       }
     } catch (error) {
-      console.error('[NovelAI] 生成失败:', error)
+      console.error('[NovelAI] generateImage: 生成失败:', error)
       return {
         success: false,
         error: error instanceof Error ? error.message : '生成失败'

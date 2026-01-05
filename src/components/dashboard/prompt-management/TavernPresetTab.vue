@@ -90,6 +90,81 @@
       </div>
     </div>
 
+    <!-- 可用宏变量介绍 -->
+    <div class="macro-help-section">
+      <div class="section-header" @click="showMacroHelp = !showMacroHelp">
+        <h4>📚 可用宏变量与占位符</h4>
+        <span class="toggle-icon">{{ showMacroHelp ? '▼' : '▶' }}</span>
+      </div>
+      <div v-if="showMacroHelp" class="macro-help-content">
+        <div class="macro-category">
+          <h5>🏷️ 基础宏变量（在提示词内容中使用）</h5>
+          <div class="macro-list">
+            <div class="macro-item">
+              <code>{{user}}</code>
+              <span>用户/角色名称（来自角色基础信息.名字）</span>
+            </div>
+            <div class="macro-item">
+              <code>{{char}}</code>
+              <span>AI角色名（预设名称）</span>
+            </div>
+            <div class="macro-item">
+              <code>{{personaDescription}}</code>
+              <span>用户人设描述（设置面板 → AI服务配置中编辑）</span>
+            </div>
+            <div class="macro-item">
+              <code>{{scenario}}</code>
+              <span>场景设定（自动从游戏状态生成：位置、时间、物品等）</span>
+            </div>
+            <div class="macro-item">
+              <code>{{lastUserMessage}}</code>
+              <span>最后一条用户消息</span>
+            </div>
+            <div class="macro-item">
+              <code>{{lastCharMessage}}</code>
+              <span>最后一条AI消息</span>
+            </div>
+          </div>
+        </div>
+        <div class="macro-category">
+          <h5>📍 占位符条目（系统自动填充内容）</h5>
+          <div class="macro-list">
+            <div class="macro-item">
+              <code>personaDescription</code>
+              <span>用户人设 → 来自设置面板"Persona Description"</span>
+            </div>
+            <div class="macro-item">
+              <code>scenario</code>
+              <span>场景设定 → 自动从游戏状态生成</span>
+            </div>
+            <div class="macro-item">
+              <code>charDescription</code>
+              <span>角色描述 → 自动从角色基础信息生成</span>
+            </div>
+            <div class="macro-item">
+              <code>charPersonality</code>
+              <span>角色性格 → 自动从角色信息生成</span>
+            </div>
+            <div class="macro-item">
+              <code>chatHistory</code>
+              <span>聊天历史 → 记忆系统（短期+中期+长期）</span>
+            </div>
+            <div class="macro-item">
+              <code>worldInfoBefore</code>
+              <span>前置世界书 → 从世界书条目读取</span>
+            </div>
+            <div class="macro-item">
+              <code>worldInfoAfter</code>
+              <span>后置世界书 → 从世界书条目读取</span>
+            </div>
+          </div>
+        </div>
+        <div class="macro-tip">
+          💡 <strong>提示：</strong>占位符是位置标记，内容由系统自动填充。要修改内容请去对应来源处修改（设置面板、世界书、角色信息等）。
+        </div>
+      </div>
+    </div>
+
     <!-- 当前预设详情 -->
     <div v-if="activePreset" class="detail-sections">
       <!-- 提示词列表 -->
@@ -112,16 +187,38 @@
               <option value="disabled">禁用</option>
               <option value="marker">占位符</option>
             </select>
+            <button class="action-btn add-btn" @click="showCreatePromptModal = true">
+              <span class="btn-icon">➕</span>
+              创建条目
+            </button>
           </div>
           <div ref="promptsListRef" class="prompts-list expandable">
             <div
               v-for="(prompt, idx) in filteredPrompts"
               :key="prompt.identifier"
               class="prompt-item"
-              :class="{ disabled: !prompt.enabled, marker: prompt.marker, expanded: expandedPromptId === prompt.identifier }"
-              @click="togglePromptExpand(prompt)"
+              :class="{
+                disabled: !prompt.enabled,
+                marker: prompt.marker,
+                expanded: expandedPromptId === prompt.identifier,
+                'drag-over': dragOverPromptId === prompt.identifier,
+                'touch-dragging': isTouchDragging && draggedPrompt?.identifier === prompt.identifier
+              }"
+              :draggable="!isMobile"
+              @click="handlePromptClick($event, prompt)"
+              @dragstart="handleDragStart($event, prompt)"
+              @dragend="handleDragEnd($event)"
+              @dragover="handleDragOver($event, prompt)"
+              @dragleave="handleDragLeave($event)"
+              @drop="handleDrop($event, prompt)"
+              @touchstart="handleTouchStart($event, prompt)"
+              @touchmove.prevent="handleTouchMove($event, prompt)"
+              @touchend="handleTouchEnd($event, prompt)"
+              @touchcancel="handleTouchCancel"
+              @contextmenu.prevent
             >
               <div class="prompt-item-header">
+                <span class="drag-handle" title="拖动排序">⋮⋮</span>
                 <span class="prompt-order">{{ idx + 1 }}</span>
                 <span class="prompt-status">{{ prompt.enabled ? '✓' : '✗' }}</span>
                 <span class="prompt-name">{{ prompt.name }}</span>
@@ -380,6 +477,80 @@
       </div>
     </div>
 
+    <!-- 创建提示词条目模态框 -->
+    <div v-if="showCreatePromptModal" class="modal-overlay" @click.self="showCreatePromptModal = false">
+      <div class="modal-container prompt-modal">
+        <div class="modal-header">
+          <h3>➕ 创建自定义条目</h3>
+          <button class="close-btn" @click="showCreatePromptModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="prompt-detail-info">
+            <div class="info-row">
+              <label>名称：</label>
+              <input
+                v-model="newPromptData.name"
+                type="text"
+                class="edit-input"
+                placeholder="输入条目名称..."
+              />
+            </div>
+            <div class="info-row">
+              <label>角色：</label>
+              <select v-model="newPromptData.role" class="edit-select">
+                <option value="system">system</option>
+                <option value="user">user</option>
+                <option value="assistant">assistant</option>
+              </select>
+            </div>
+            <div class="info-row">
+              <label>状态：</label>
+              <label class="toggle-switch">
+                <input type="checkbox" v-model="newPromptData.enabled" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">{{ newPromptData.enabled ? '启用' : '禁用' }}</span>
+              </label>
+            </div>
+            <div class="info-row">
+              <label>注入位置：</label>
+              <select v-model="newPromptData.injection_position" class="edit-select">
+                <option :value="0">消息之前</option>
+                <option :value="1">消息之后</option>
+              </select>
+            </div>
+            <div class="info-row">
+              <label>注入深度：</label>
+              <input
+                v-model.number="newPromptData.injection_depth"
+                type="number"
+                min="0"
+                class="edit-input small"
+              />
+              <span class="depth-hint">（数值越大越靠前）</span>
+            </div>
+          </div>
+          <div class="prompt-content-preview">
+            <label>内容：</label>
+            <div class="macro-hints">
+              可用宏：<code>{{user}}</code> <code>{{char}}</code> <code>{{personaDescription}}</code> <code>{{scenario}}</code>
+            </div>
+            <textarea
+              v-model="newPromptData.content"
+              class="edit-textarea"
+              rows="10"
+              placeholder="输入提示词内容...&#10;&#10;示例：&#10;你正在与{{user}}互动。&#10;{{personaDescription}}&#10;当前场景：{{scenario}}"
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="action-btn cancel" @click="showCreatePromptModal = false">取消</button>
+          <button class="action-btn save" @click="createNewPrompt" :disabled="isCreatingPrompt || !newPromptData.name.trim()">
+            {{ isCreatingPrompt ? '创建中...' : '创建' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- 删除确认对话框 -->
     <div v-if="deletingPreset" class="modal-overlay" @click.self="deletingPreset = null">
       <div class="modal-container confirm-modal">
@@ -401,7 +572,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, toRaw, nextTick } from 'vue'
 import { tavernPresetService } from '@/services/tavernPresetService'
 import { aiService } from '@/services/aiService'
 import type { LocalTavernPreset, TavernPromptItem, TavernRegexScript } from '@/types/tavernPreset'
@@ -422,14 +593,48 @@ const showParams = ref(false)
 const promptsListRef = ref<HTMLElement | null>(null)
 const expandedPromptId = ref<string | null>(null)
 
+// 拖动状态
+const draggedPrompt = ref<TavernPromptItem | null>(null)
+const dragOverPromptId = ref<string | null>(null)
+const isDragging = ref(false)
+
+// 触摸拖动状态
+const touchStartY = ref(0)
+const touchStartX = ref(0)
+const touchStartTime = ref(0)
+const touchDragElement = ref<HTMLElement | null>(null)
+const touchClone = ref<HTMLElement | null>(null)
+const isTouchDragging = ref(false)
+const longPressTimer = ref<number | null>(null)
+const LONG_PRESS_DURATION = 400 // 长按400ms后开始拖动
+const touchMoved = ref(false)
+
+// 检测是否为移动设备
+const isMobile = ref(false)
+
 // 搜索和筛选
 const promptSearch = ref('')
 const promptFilter = ref<'all' | 'enabled' | 'disabled' | 'marker'>('all')
+
+// 宏帮助显示状态
+const showMacroHelp = ref(false)
 
 // 模态框状态
 const viewingPreset = ref<LocalTavernPreset | null>(null)
 const viewingPrompt = ref<TavernPromptItem | null>(null)
 const deletingPreset = ref<LocalTavernPreset | null>(null)
+const showCreatePromptModal = ref(false)
+const isCreatingPrompt = ref(false)
+
+// 新条目数据
+const newPromptData = ref({
+  name: '',
+  role: 'system' as 'system' | 'user' | 'assistant',
+  enabled: true,
+  injection_position: 0,
+  injection_depth: 4,
+  content: '',
+})
 
 // 编辑状态
 const isEditingPrompt = ref(false)
@@ -532,11 +737,344 @@ function viewPromptDetail(prompt: TavernPromptItem) {
 }
 
 function togglePromptExpand(prompt: TavernPromptItem) {
+  // 如果正在拖动，不触发展开
+  if (isDragging.value || isTouchDragging.value) return
+
   if (expandedPromptId.value === prompt.identifier) {
     expandedPromptId.value = null
   } else {
     expandedPromptId.value = prompt.identifier
   }
+}
+
+// 处理点击事件（区分桌面端和移动端）
+function handlePromptClick(event: MouseEvent, prompt: TavernPromptItem) {
+  // 移动端由触摸事件处理，忽略合成的点击事件
+  if (isMobile.value) return
+  // 如果正在拖动，不触发
+  if (isDragging.value) return
+  togglePromptExpand(prompt)
+}
+
+// 拖动功能
+function handleDragStart(event: DragEvent, prompt: TavernPromptItem) {
+  if (!event.dataTransfer) return
+
+  isDragging.value = true
+  draggedPrompt.value = prompt
+
+  // 设置拖动数据
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', prompt.identifier)
+
+  // 添加拖动中的样式类
+  const target = event.target as HTMLElement
+  setTimeout(() => {
+    target.classList.add('dragging')
+  }, 0)
+}
+
+function handleDragEnd(event: DragEvent) {
+  isDragging.value = false
+  draggedPrompt.value = null
+  dragOverPromptId.value = null
+
+  // 移除拖动样式
+  const target = event.target as HTMLElement
+  target.classList.remove('dragging')
+}
+
+function handleDragOver(event: DragEvent, prompt: TavernPromptItem) {
+  event.preventDefault()
+  if (!event.dataTransfer) return
+
+  event.dataTransfer.dropEffect = 'move'
+
+  // 更新悬停目标
+  if (draggedPrompt.value && draggedPrompt.value.identifier !== prompt.identifier) {
+    dragOverPromptId.value = prompt.identifier
+  }
+}
+
+function handleDragLeave(event: DragEvent) {
+  // 检查是否真的离开了元素（而不是进入子元素）
+  const relatedTarget = event.relatedTarget as HTMLElement
+  const currentTarget = event.currentTarget as HTMLElement
+
+  if (!currentTarget.contains(relatedTarget)) {
+    dragOverPromptId.value = null
+  }
+}
+
+// 触摸拖动功能
+function handleTouchStart(event: TouchEvent, prompt: TavernPromptItem) {
+  // 重置状态
+  touchMoved.value = false
+
+  // 记录触摸开始位置和时间
+  touchStartY.value = event.touches[0].clientY
+  touchStartX.value = event.touches[0].clientX
+  touchStartTime.value = Date.now()
+  touchDragElement.value = event.currentTarget as HTMLElement
+  draggedPrompt.value = prompt
+
+  // 添加样式类防止变暗
+  touchDragElement.value.classList.add('touch-active')
+
+  // 阻止长按上下文菜单
+  document.body.classList.add('touch-dragging-active')
+
+  // 设置长按计时器
+  longPressTimer.value = window.setTimeout(() => {
+    if (!touchMoved.value) {
+      startTouchDrag(prompt)
+    }
+  }, LONG_PRESS_DURATION)
+}
+
+function startTouchDrag(prompt: TavernPromptItem) {
+  if (!touchDragElement.value) return
+
+  isTouchDragging.value = true
+  isDragging.value = true
+
+  // 创建拖动时的克隆元素
+  const rect = touchDragElement.value.getBoundingClientRect()
+  const clone = touchDragElement.value.cloneNode(true) as HTMLElement
+  clone.style.cssText = `
+    position: fixed;
+    left: ${rect.left}px;
+    top: ${rect.top}px;
+    width: ${rect.width}px;
+    height: ${rect.height}px;
+    z-index: 9999;
+    opacity: 0.95;
+    pointer-events: none;
+    box-shadow: 0 8px 32px rgba(139, 92, 246, 0.5);
+    transform: scale(1.02);
+    border: 2px solid var(--accent-color, #8b5cf6);
+    border-radius: 6px;
+    background: var(--bg-tertiary, #252536);
+  `
+  clone.classList.add('touch-dragging-clone')
+  document.body.appendChild(clone)
+  touchClone.value = clone
+
+  // 触发震动反馈（如果支持）
+  if (navigator.vibrate) {
+    navigator.vibrate(50)
+  }
+
+  console.log('[TavernPresetTab] 开始触摸拖动:', prompt.name)
+}
+
+function handleTouchMove(event: TouchEvent, prompt: TavernPromptItem) {
+  const touch = event.touches[0]
+  const deltaX = Math.abs(touch.clientX - touchStartX.value)
+  const deltaY = Math.abs(touch.clientY - touchStartY.value)
+
+  // 如果还没开始拖动
+  if (!isTouchDragging.value) {
+    // 检查是否移动了足够距离来取消长按
+    if (deltaX > 10 || deltaY > 10) {
+      touchMoved.value = true
+      // 取消长按计时器
+      if (longPressTimer.value) {
+        clearTimeout(longPressTimer.value)
+        longPressTimer.value = null
+      }
+    }
+    return
+  }
+
+  // 已经在拖动中，阻止默认滚动行为
+  event.preventDefault()
+
+  // 更新克隆元素位置
+  if (touchClone.value) {
+    const initialRect = touchDragElement.value?.getBoundingClientRect()
+    if (initialRect) {
+      touchClone.value.style.top = `${touch.clientY - initialRect.height / 2}px`
+      touchClone.value.style.left = `${touch.clientX - initialRect.width / 2}px`
+    }
+  }
+
+  // 临时隐藏克隆元素以检测下方元素
+  if (touchClone.value) {
+    touchClone.value.style.display = 'none'
+  }
+
+  // 检测当前触摸位置下的元素
+  const elementsAtPoint = document.elementsFromPoint(touch.clientX, touch.clientY)
+
+  // 恢复克隆元素显示
+  if (touchClone.value) {
+    touchClone.value.style.display = ''
+  }
+
+  const targetElement = elementsAtPoint.find(el =>
+    el.classList.contains('prompt-item') && el !== touchDragElement.value
+  ) as HTMLElement | undefined
+
+  if (targetElement) {
+    // 找到对应的 prompt
+    const allItems = Array.from(promptsListRef.value?.querySelectorAll('.prompt-item') || [])
+    const targetIndex = allItems.indexOf(targetElement)
+    if (targetIndex >= 0 && filteredPrompts.value[targetIndex]) {
+      const newTargetId = filteredPrompts.value[targetIndex].identifier
+      if (dragOverPromptId.value !== newTargetId) {
+        dragOverPromptId.value = newTargetId
+        // 轻微震动反馈
+        if (navigator.vibrate) {
+          navigator.vibrate(10)
+        }
+      }
+    }
+  } else {
+    dragOverPromptId.value = null
+  }
+}
+
+async function handleTouchEnd(event: TouchEvent, prompt: TavernPromptItem) {
+  // 清除长按计时器
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+    longPressTimer.value = null
+  }
+
+  // 如果没有拖动
+  if (!isTouchDragging.value) {
+    const timeDiff = Date.now() - touchStartTime.value
+    // 短按且没有移动，触发展开/折叠
+    if (timeDiff < LONG_PRESS_DURATION && !touchMoved.value) {
+      togglePromptExpand(prompt)
+    }
+    resetTouchState()
+    return
+  }
+
+  // 移除克隆元素
+  if (touchClone.value) {
+    touchClone.value.remove()
+    touchClone.value = null
+  }
+
+  // 执行排序
+  if (draggedPrompt.value && dragOverPromptId.value && activePreset.value) {
+    const targetPrompt = filteredPrompts.value.find(p => p.identifier === dragOverPromptId.value)
+    if (targetPrompt && draggedPrompt.value.identifier !== targetPrompt.identifier) {
+      console.log('[TavernPresetTab] 执行触摸排序')
+      await executeReorder(draggedPrompt.value, targetPrompt)
+    }
+  }
+
+  resetTouchState()
+}
+
+function handleTouchCancel() {
+  // 清除长按计时器
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+    longPressTimer.value = null
+  }
+
+  // 移除克隆元素
+  if (touchClone.value) {
+    touchClone.value.remove()
+    touchClone.value = null
+  }
+
+  resetTouchState()
+}
+
+function resetTouchState() {
+  // 移除样式类
+  if (touchDragElement.value) {
+    touchDragElement.value.classList.remove('touch-active')
+  }
+  document.body.classList.remove('touch-dragging-active')
+
+  isTouchDragging.value = false
+  isDragging.value = false
+  draggedPrompt.value = null
+  dragOverPromptId.value = null
+  touchDragElement.value = null
+  touchMoved.value = false
+}
+
+// 提取排序逻辑为独立函数
+async function executeReorder(sourcePrompt: TavernPromptItem, targetPrompt: TavernPromptItem) {
+  if (!activePreset.value) return
+
+  console.log('[TavernPresetTab] 执行排序:', {
+    from: sourcePrompt.name,
+    to: targetPrompt.name
+  })
+
+  try {
+    // 获取当前的排序列表
+    const orderedPrompts = [...activePreset.value.orderedPrompts]
+
+    // 找到拖动项和目标项的索引
+    const fromIndex = orderedPrompts.findIndex(p => p.identifier === sourcePrompt.identifier)
+    const toIndex = orderedPrompts.findIndex(p => p.identifier === targetPrompt.identifier)
+
+    if (fromIndex === -1 || toIndex === -1) {
+      console.error('[TavernPresetTab] 未找到拖动项或目标项')
+      return
+    }
+
+    // 执行移动
+    const [movedItem] = orderedPrompts.splice(fromIndex, 1)
+    orderedPrompts.splice(toIndex, 0, movedItem)
+
+    // 更新 promptOrder 数组
+    const updatedPromptOrder = orderedPrompts.map(p => ({
+      identifier: p.identifier,
+      enabled: p.enabled
+    }))
+
+    // 保存到数据库
+    const plainUpdates = JSON.parse(JSON.stringify({
+      orderedPrompts,
+      promptOrder: updatedPromptOrder
+    }))
+
+    await tavernPresetService.updatePreset(activePreset.value.id, plainUpdates)
+
+    console.log('[TavernPresetTab] 排序已保存')
+
+    // 刷新预设
+    await refreshPresets()
+
+    // 触发震动反馈表示成功
+    if (navigator.vibrate) {
+      navigator.vibrate(30)
+    }
+
+  } catch (error) {
+    console.error('[TavernPresetTab] 保存排序失败:', error)
+    alert('保存排序失败: ' + (error instanceof Error ? error.message : String(error)))
+  }
+}
+
+async function handleDrop(event: DragEvent, targetPrompt: TavernPromptItem) {
+  event.preventDefault()
+
+  if (!draggedPrompt.value || !activePreset.value) {
+    dragOverPromptId.value = null
+    return
+  }
+
+  // 如果拖到自己身上，忽略
+  if (draggedPrompt.value.identifier === targetPrompt.identifier) {
+    dragOverPromptId.value = null
+    return
+  }
+
+  // 使用共享的排序逻辑
+  await executeReorder(draggedPrompt.value, targetPrompt)
+  dragOverPromptId.value = null
 }
 
 function scrollPromptsToTop() {
@@ -616,17 +1154,39 @@ function closePromptModal() {
 }
 
 async function saveEditedPrompt() {
-  if (!activePreset.value || !viewingPrompt.value) return
+  if (!activePreset.value || !viewingPrompt.value) {
+    console.error('[TavernPresetTab] 保存失败: activePreset 或 viewingPrompt 为空', {
+      activePreset: !!activePreset.value,
+      viewingPrompt: !!viewingPrompt.value
+    })
+    return
+  }
 
   isSavingPrompt.value = true
+  console.log('[TavernPresetTab] 开始保存提示词:', {
+    identifier: editingPromptData.value.identifier,
+    name: editingPromptData.value.name,
+    promptsCount: activePreset.value.prompts.length,
+    orderedPromptsCount: activePreset.value.orderedPrompts.length
+  })
+
   try {
     // 找到并更新对应的提示词
     const promptIndex = activePreset.value.prompts.findIndex(
       p => p.identifier === editingPromptData.value.identifier
     )
 
+    console.log('[TavernPresetTab] 在 prompts 中查找结果:', {
+      promptIndex,
+      searchingFor: editingPromptData.value.identifier,
+      availableIdentifiers: activePreset.value.prompts.map(p => p.identifier)
+    })
+
     if (promptIndex === -1) {
-      console.error('未找到要编辑的提示词')
+      console.error('[TavernPresetTab] 未找到要编辑的提示词，identifier:', editingPromptData.value.identifier)
+      // 显示错误提示给用户
+      alert('保存失败：未找到要编辑的提示词，请刷新页面后重试')
+      isSavingPrompt.value = false  // 重置保存状态！
       return
     }
 
@@ -689,12 +1249,24 @@ async function saveEditedPrompt() {
     }
 
     // 保存到数据库
-    await tavernPresetService.updatePreset(activePreset.value.id, {
+    // 重要：需要将响应式代理对象转换为纯对象，否则 IndexedDB 无法克隆
+    const plainUpdates = JSON.parse(JSON.stringify({
       prompts: updatedPrompts,
       orderedPrompts: updatedOrderedPrompts,
       rawData: updatedRawData,
       stats: updatedStats,
+    }))
+
+    console.log('[TavernPresetTab] 准备保存到数据库:', {
+      presetId: activePreset.value.id,
+      updatedPromptsCount: plainUpdates.prompts.length,
+      updatedOrderedPromptsCount: plainUpdates.orderedPrompts.length,
+      rawDataPromptsCount: plainUpdates.rawData?.prompts?.length
     })
+
+    await tavernPresetService.updatePreset(activePreset.value.id, plainUpdates)
+
+    console.log('[TavernPresetTab] 数据库保存成功')
 
     // 更新本地状态
     viewingPrompt.value = updatedPrompts[promptIndex]
@@ -706,6 +1278,8 @@ async function saveEditedPrompt() {
     console.log('[TavernPresetTab] 提示词已更新:', editingPromptData.value.name)
   } catch (error) {
     console.error('[TavernPresetTab] 保存提示词失败:', error)
+    // 显示错误提示给用户
+    alert('保存提示词失败: ' + (error instanceof Error ? error.message : String(error)))
   } finally {
     isSavingPrompt.value = false
   }
@@ -774,6 +1348,87 @@ function handleImported(info: { id: string; name: string }) {
   refreshPresets()
 }
 
+// 创建新的提示词条目
+async function createNewPrompt() {
+  if (!activePreset.value || !newPromptData.value.name.trim()) {
+    return
+  }
+
+  isCreatingPrompt.value = true
+
+  try {
+    // 生成唯一标识符
+    const identifier = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+    // 创建新条目
+    const newPrompt: TavernPromptItem = {
+      identifier,
+      name: newPromptData.value.name.trim(),
+      enabled: newPromptData.value.enabled,
+      injection_position: newPromptData.value.injection_position,
+      injection_depth: newPromptData.value.injection_depth,
+      injection_order: 0,
+      role: newPromptData.value.role,
+      content: newPromptData.value.content,
+      system_prompt: newPromptData.value.role === 'system',
+      marker: false,
+    }
+
+    // 更新 prompts 数组
+    const updatedPrompts = [...activePreset.value.prompts, newPrompt]
+
+    // 更新 orderedPrompts 数组（添加到末尾）
+    const updatedOrderedPrompts = [...activePreset.value.orderedPrompts, newPrompt]
+
+    // 更新 promptOrder 数组
+    const updatedPromptOrder = [
+      ...activePreset.value.promptOrder,
+      { identifier, enabled: newPromptData.value.enabled }
+    ]
+
+    // 更新统计信息
+    const updatedStats = {
+      ...activePreset.value.stats,
+      totalPrompts: updatedPrompts.length,
+      enabledPrompts: updatedOrderedPrompts.filter(p => p.enabled && !p.marker).length,
+    }
+
+    // 保存到数据库
+    const plainUpdates = JSON.parse(JSON.stringify({
+      prompts: updatedPrompts,
+      orderedPrompts: updatedOrderedPrompts,
+      promptOrder: updatedPromptOrder,
+      stats: updatedStats,
+    }))
+
+    await tavernPresetService.updatePreset(activePreset.value.id, plainUpdates)
+
+    console.log('[TavernPresetTab] 新条目已创建:', newPrompt.name)
+
+    // 重置表单
+    newPromptData.value = {
+      name: '',
+      role: 'system',
+      enabled: true,
+      injection_position: 0,
+      injection_depth: 4,
+      content: '',
+    }
+
+    // 关闭模态框
+    showCreatePromptModal.value = false
+
+    // 刷新预设列表
+    await refreshPresets()
+
+  } catch (error) {
+    console.error('[TavernPresetTab] 创建条目失败:', error)
+    alert('创建条目失败: ' + (error instanceof Error ? error.message : String(error)))
+  } finally {
+    isCreatingPrompt.value = false
+  }
+}
+
 function formatDate(date: Date | string): string {
   const d = new Date(date)
   return d.toLocaleString('zh-CN', {
@@ -797,6 +1452,20 @@ function formatPlacement(placement: number[]): string {
 // 生命周期
 onMounted(() => {
   refreshPresets()
+
+  // 检测是否为移动设备
+  isMobile.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  console.log('[TavernPresetTab] 移动设备检测:', isMobile.value)
+})
+
+onUnmounted(() => {
+  // 清理触摸拖动相关资源
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+  }
+  if (touchClone.value) {
+    touchClone.value.remove()
+  }
 })
 </script>
 
@@ -867,6 +1536,16 @@ onMounted(() => {
   background: var(--bg-tertiary, #252536);
   border: 1px solid var(--border-color, #444);
   color: var(--text-primary, #fff);
+}
+
+.action-btn.add-btn {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: white;
+  flex-shrink: 0;
+}
+
+.action-btn.add-btn:hover {
+  background: linear-gradient(135deg, #16a34a, #15803d);
 }
 
 .action-btn.cancel {
@@ -1161,10 +1840,47 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.2s ease;
   overflow: hidden;
+  /* 禁用移动端默认的触摸高亮 */
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-touch-callout: none !important;
+  /* 禁用用户选择 */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 触摸时防止变暗 */
+.prompt-item.touch-active {
+  background: var(--bg-tertiary, #252536) !important;
+  opacity: 1 !important;
+}
+
+.prompt-item:active {
+  /* 覆盖默认的 :active 状态样式 */
+  background: var(--bg-tertiary, #252536);
 }
 
 .prompt-item:hover {
   background: rgba(139, 92, 246, 0.1);
+}
+
+.prompt-item.dragging,
+.prompt-item.touch-dragging {
+  opacity: 0.3;
+  background: rgba(139, 92, 246, 0.2);
+  border: 2px dashed var(--accent-color, #8b5cf6);
+  transform: scale(0.98);
+}
+
+.prompt-item.drag-over {
+  border-top: 3px solid var(--accent-color, #8b5cf6);
+  background: rgba(139, 92, 246, 0.15);
+}
+
+/* 触摸拖动克隆元素样式 */
+.touch-dragging-clone {
+  background: var(--bg-tertiary, #252536) !important;
+  border: 2px solid var(--accent-color, #8b5cf6) !important;
+  border-radius: 6px !important;
 }
 
 .prompt-item.disabled {
@@ -1185,6 +1901,85 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
+}
+
+.drag-handle {
+  font-size: 14px;
+  color: var(--text-secondary, #666);
+  cursor: grab;
+  user-select: none;
+  padding: 4px 8px;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+  letter-spacing: 2px;
+  /* 移动端增大触摸区域 */
+  min-width: 32px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.prompt-item:hover .drag-handle,
+.prompt-item:active .drag-handle {
+  opacity: 1;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .drag-handle {
+    opacity: 0.8;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 18px;
+  }
+
+  .prompt-item {
+    /* 禁用移动端的默认触摸行为 */
+    touch-action: manipulation;
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    /* 禁用长按菜单 */
+    -webkit-touch-callout: none !important;
+    /* 禁用触摸高亮 */
+    -webkit-tap-highlight-color: transparent !important;
+  }
+
+  /* 移动端触摸时保持原样 */
+  .prompt-item:active,
+  .prompt-item.touch-active {
+    background: var(--bg-tertiary, #252536) !important;
+    opacity: 1 !important;
+    filter: none !important;
+  }
+
+  .prompt-item.dragging,
+  .prompt-item.touch-dragging {
+    opacity: 0.25 !important;
+  }
+
+  .prompt-item-header {
+    min-height: 48px;
+  }
+}
+
+/* 触摸拖动时的全局样式 */
+body.touch-dragging-active {
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* 防止触摸时元素变暗 */
+body.touch-dragging-active * {
+  -webkit-tap-highlight-color: transparent !important;
 }
 
 .prompt-order {
@@ -1792,5 +2587,106 @@ code.marker-value {
 .modal-body::-webkit-scrollbar-thumb:hover,
 .prompt-content-preview pre::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary, #666);
+}
+
+/* 宏变量帮助区域 */
+.macro-help-section {
+  margin-bottom: 20px;
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.macro-help-section .section-header {
+  padding: 12px 16px;
+  margin: 0;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  cursor: pointer;
+}
+
+.macro-help-section .section-header h4 {
+  color: white;
+}
+
+.macro-help-content {
+  padding: 16px;
+}
+
+.macro-category {
+  margin-bottom: 16px;
+}
+
+.macro-category h5 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: var(--text-primary, #fff);
+}
+
+.macro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.macro-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #252536);
+  border-radius: 6px;
+}
+
+.macro-item code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  padding: 2px 8px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.macro-item span {
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+}
+
+.macro-tip {
+  padding: 12px 16px;
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+}
+
+.macro-tip strong {
+  color: #f59e0b;
+}
+
+/* 深度提示 */
+.depth-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  margin-left: 8px;
+}
+
+/* 宏提示 */
+.macro-hints {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+
+.macro-hints code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+  border-radius: 3px;
+  margin-right: 4px;
 }
 </style>
