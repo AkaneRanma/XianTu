@@ -5,11 +5,16 @@
 
 import type { MacroContext } from '@/types/tavernPreset'
 
+// 全局变量存储的 localStorage key
+const GLOBAL_VARS_STORAGE_KEY = 'tavern_global_variables'
+
 /**
  * 酒馆宏变量处理器类
  */
 export class TavernMacroProcessor {
   private variables: Map<string, string> = new Map()
+  private static globalVariables: Map<string, string> = new Map()
+  private static globalVarsLoaded = false
 
   /**
    * 处理内容中的所有宏变量
@@ -29,14 +34,16 @@ export class TavernMacroProcessor {
     const hasTrim = result.includes('{{trim}}')
     result = result.replace(/\{\{trim\}\}/gi, '')
 
-    // 3. 处理 setvar - 必须在 getvar 之前处理
+    // 3. 处理 setvar 和 setglobalvar - 必须在 getvar 之前处理
     result = this.processSetVar(result, context)
+    result = this.processSetGlobalVar(result)
 
     // 4. 处理基础变量替换
     result = this.processBasicVariables(result, context)
 
-    // 5. 处理 getvar
+    // 5. 处理 getvar 和 getglobalvar
     result = this.processGetVar(result, context)
+    result = this.processGetGlobalVar(result)
 
     // 6. 处理随机选择 {{random::a::b::c}}
     result = this.processRandom(result)
@@ -216,6 +223,34 @@ export class TavernMacroProcessor {
     result = result.replace(/\{\{mesExamples\}\}/gi, context.dialogueExamples || '')
     result = result.replace(/\{\{dialogueExamples\}\}/gi, context.dialogueExamples || '')
 
+    // 🔥 正文优化专用占位符
+
+    // {{playerInput}} - 本次玩家输入
+    result = result.replace(/\{\{playerInput\}\}/gi, context.playerInput || '')
+
+    // {{sourceText}} - 待优化正文（第一步正文）
+    result = result.replace(/\{\{sourceText\}\}/gi, context.sourceText || '')
+
+    // {{optimizedHistory::N}} - 获取最新N层历史优化正文（必须先处理带参数的）
+    result = result.replace(/\{\{optimizedHistory::(\d+)\}\}/gi, (_, n) => {
+      const count = parseInt(n, 10)
+      if (!context.optimizedHistory || context.optimizedHistory.length === 0 || count <= 0) {
+        return ''
+      }
+      const selected = context.optimizedHistory.slice(-count)
+      return selected.map((text, i) => `【历史优化${i + 1}】\n${text}`).join('\n\n---\n\n')
+    })
+
+    // {{optimizedHistory}} - 全部历史优化正文
+    result = result.replace(/\{\{optimizedHistory\}\}/gi, () => {
+      if (!context.optimizedHistory || context.optimizedHistory.length === 0) {
+        return ''
+      }
+      return context.optimizedHistory
+        .map((text, i) => `【历史优化${i + 1}】\n${text}`)
+        .join('\n\n---\n\n')
+    })
+
     return result
   }
 
@@ -228,6 +263,122 @@ export class TavernMacroProcessor {
       // 优先从实例变量获取，其次从上下文获取
       return this.variables.get(trimmedKey) || context.variables[trimmedKey] || ''
     })
+  }
+
+  /**
+   * 处理 setglobalvar 宏 {{setglobalvar::key::value}}
+   * 全局变量会持久化到 localStorage
+   */
+  private processSetGlobalVar(content: string): string {
+    // 确保全局变量已加载
+    this.loadGlobalVars()
+
+    let result = ''
+    let i = 0
+    const input = content
+
+    while (i < input.length) {
+      // 检查是否是 setglobalvar 开始 {{setglobalvar::
+      if (input.substring(i, i + 16) === '{{setglobalvar::') {
+        let j = i + 16 // 跳过 {{setglobalvar::
+
+        // 解析 key（直到遇到 ::）
+        let key = ''
+        while (j < input.length && input.substring(j, j + 2) !== '::') {
+          key += input[j]
+          j++
+        }
+
+        if (input.substring(j, j + 2) === '::') {
+          j += 2 // 跳过 ::
+
+          // 使用括号计数解析 value（直到找到匹配的 }}）
+          let value = ''
+          let depth = 1
+
+          while (j < input.length && depth > 0) {
+            if (input.substring(j, j + 2) === '{{') {
+              depth++
+              value += '{{'
+              j += 2
+            } else if (input.substring(j, j + 2) === '}}') {
+              depth--
+              if (depth === 0) {
+                j += 2
+                break
+              }
+              value += '}}'
+              j += 2
+            } else {
+              value += input[j]
+              j++
+            }
+          }
+
+          // 存储到全局变量
+          const trimmedKey = key.trim()
+          TavernMacroProcessor.globalVariables.set(trimmedKey, value)
+          this.saveGlobalVars()
+
+          // setglobalvar 不产生输出
+          i = j
+          continue
+        }
+      }
+
+      result += input[i]
+      i++
+    }
+
+    return result
+  }
+
+  /**
+   * 处理 getglobalvar 宏 {{getglobalvar::key}}
+   */
+  private processGetGlobalVar(content: string): string {
+    // 确保全局变量已加载
+    this.loadGlobalVars()
+
+    return content.replace(/\{\{getglobalvar::([^}]+)\}\}/gi, (_, key) => {
+      const trimmedKey = key.trim()
+      return TavernMacroProcessor.globalVariables.get(trimmedKey) || ''
+    })
+  }
+
+  /**
+   * 从 localStorage 加载全局变量
+   */
+  private loadGlobalVars(): void {
+    if (TavernMacroProcessor.globalVarsLoaded) return
+
+    try {
+      const saved = localStorage.getItem(GLOBAL_VARS_STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        Object.entries(parsed).forEach(([key, value]) => {
+          TavernMacroProcessor.globalVariables.set(key, value as string)
+        })
+      }
+      TavernMacroProcessor.globalVarsLoaded = true
+    } catch (e) {
+      console.error('[TavernMacroProcessor] 加载全局变量失败:', e)
+    }
+  }
+
+  /**
+   * 保存全局变量到 localStorage
+   */
+  private saveGlobalVars(): void {
+    try {
+      const obj: Record<string, string> = {}
+      TavernMacroProcessor.globalVariables.forEach((value, key) => {
+        obj[key] = value
+      })
+      localStorage.setItem(GLOBAL_VARS_STORAGE_KEY, JSON.stringify(obj))
+    } catch (e) {
+      console.error('[TavernMacroProcessor] 保存全局变量失败:', e)
+    }
   }
 
   /**
@@ -249,7 +400,13 @@ export class TavernMacroProcessor {
       /\{\{user\}\}/i,
       /\{\{char\}\}/i,
       /\{\{getvar::/i,
+      /\{\{getglobalvar::/i,
       /\{\{random::/i,
+      // 🔥 正文优化专用占位符
+      /\{\{playerInput\}\}/i,
+      /\{\{sourceText\}\}/i,
+      /\{\{optimizedHistory\}\}/i,
+      /\{\{optimizedHistory::\d+\}\}/i,
     ]
     return macroPatterns.some((pattern) => pattern.test(content))
   }
@@ -280,10 +437,58 @@ export class TavernMacroProcessor {
   }
 
   /**
-   * 重置变量状态
+   * 重置变量状态（仅重置实例变量，不重置全局变量）
    */
   reset(): void {
     this.variables.clear()
+  }
+
+  /**
+   * 重置全局变量状态
+   */
+  static resetGlobalVariables(): void {
+    TavernMacroProcessor.globalVariables.clear()
+    TavernMacroProcessor.globalVarsLoaded = false
+    try {
+      localStorage.removeItem(GLOBAL_VARS_STORAGE_KEY)
+    } catch (e) {
+      console.error('[TavernMacroProcessor] 清除全局变量失败:', e)
+    }
+  }
+
+  /**
+   * 获取全局变量
+   */
+  static getGlobalVariable(key: string): string | undefined {
+    return TavernMacroProcessor.globalVariables.get(key)
+  }
+
+  /**
+   * 设置全局变量
+   */
+  static setGlobalVariable(key: string, value: string): void {
+    TavernMacroProcessor.globalVariables.set(key, value)
+    // 保存到 localStorage
+    try {
+      const obj: Record<string, string> = {}
+      TavernMacroProcessor.globalVariables.forEach((v, k) => {
+        obj[k] = v
+      })
+      localStorage.setItem(GLOBAL_VARS_STORAGE_KEY, JSON.stringify(obj))
+    } catch (e) {
+      console.error('[TavernMacroProcessor] 保存全局变量失败:', e)
+    }
+  }
+
+  /**
+   * 获取所有全局变量
+   */
+  static getAllGlobalVariables(): Record<string, string> {
+    const result: Record<string, string> = {}
+    TavernMacroProcessor.globalVariables.forEach((value, key) => {
+      result[key] = value
+    })
+    return result
   }
 
   /**

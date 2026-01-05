@@ -196,6 +196,10 @@ export interface MacroContext {
   charPersonality?: string
   scenario?: string
   dialogueExamples?: string
+  // 🔥 正文优化专用占位符
+  playerInput?: string // {{playerInput}} - 本次玩家输入
+  sourceText?: string // {{sourceText}} - 待优化正文（第一步正文）
+  optimizedHistory?: string[] // {{optimizedHistory}} / {{optimizedHistory::N}} - 历史优化正文
 }
 
 // 预设统计信息

@@ -82,12 +82,20 @@
     <div class="config-section">
       <div class="section-header">
         <span class="section-title">优化正文历史配置</span>
-        <button class="clear-btn" @click="clearOptimizedTextHistory">
-          <svg viewBox="0 0 24 24" width="12" height="12">
-            <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-          </svg>
-          清空历史
-        </button>
+        <div class="header-buttons">
+          <button class="view-history-btn" @click="showHistoryModal = true">
+            <svg viewBox="0 0 24 24" width="12" height="12">
+              <path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+            </svg>
+            查看历史
+          </button>
+          <button class="clear-btn" @click="clearOptimizedTextHistory">
+            <svg viewBox="0 0 24 24" width="12" height="12">
+              <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+            清空历史
+          </button>
+        </div>
       </div>
       <div class="history-config-row">
         <div class="config-item history-count-item">
@@ -170,11 +178,49 @@
         <pre>{{ previewText }}</pre>
       </div>
     </div>
+
+    <!-- 优化正文历史查看弹窗 -->
+    <div v-if="showHistoryModal" class="modal-overlay" @click.self="showHistoryModal = false">
+      <div class="history-modal">
+        <div class="modal-header">
+          <h3>优化正文历史记录</h3>
+          <button class="close-btn" @click="showHistoryModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="historyItems.length === 0" class="empty-history">
+            <div class="empty-icon">📭</div>
+            <p>暂无优化正文历史记录</p>
+            <p class="empty-hint">生成优化正文后，历史记录会自动保存在此处</p>
+          </div>
+          <div v-else class="history-list">
+            <div class="history-info">
+              <span>共 {{ historyItems.length }} 条历史记录（按时间倒序）</span>
+            </div>
+            <div
+              v-for="(item, index) in historyItems"
+              :key="index"
+              class="history-item"
+            >
+              <div class="history-item-header">
+                <span class="history-index">第 {{ historyItems.length - index }} 层</span>
+                <span class="history-label" :class="{ latest: index === 0 }">
+                  {{ index === 0 ? '最新' : '' }}
+                </span>
+              </div>
+              <div class="history-content">{{ item }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="close-modal-btn" @click="showHistoryModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import {
   promptPreviewService,
   type ShortTermMemoryConfig
@@ -196,6 +242,16 @@ const config = ref<ShortTermMemoryConfig>({
 
 // 优化正文历史数量
 const optimizedTextHistoryCount = ref(0);
+
+// 历史查看弹窗状态
+const showHistoryModal = ref(false);
+
+// 获取历史记录列表（按时间倒序）
+const historyItems = computed(() => {
+  // 获取历史数组，然后反转（最新的在前面）
+  const history = textOptimizationService.getCurrentHistory();
+  return [...history].reverse();
+});
 
 // 刷新优化正文历史数量
 const refreshOptimizedTextHistoryCount = () => {
@@ -283,6 +339,13 @@ const refreshPreview = () => {
     .replace(/\{\{midTermCount\}\}/g, String(midTerm.length))
     .replace(/\{\{longTermCount\}\}/g, String(longTerm.length));
 };
+
+// 监听弹窗打开时刷新历史数量
+watch(showHistoryModal, (newVal) => {
+  if (newVal) {
+    refreshOptimizedTextHistoryCount();
+  }
+});
 
 onMounted(() => {
   loadConfig();
@@ -586,5 +649,208 @@ onMounted(() => {
 .preview-box::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 3px;
+}
+
+/* 标题按钮组 */
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.view-history-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(74, 158, 255, 0.1);
+  border: 1px solid rgba(74, 158, 255, 0.2);
+  border-radius: 4px;
+  color: rgba(74, 158, 255, 0.8);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.view-history-btn:hover {
+  background: rgba(74, 158, 255, 0.2);
+  border-color: rgba(74, 158, 255, 0.4);
+  color: #4a9eff;
+}
+
+/* 弹窗样式 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.history-modal {
+  background: #1e2330;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  width: 600px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #fff;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: #fff;
+}
+
+.modal-body {
+  padding: 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.empty-history {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.empty-history p {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.empty-hint {
+  font-size: 12px !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-info {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.history-item {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.history-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.history-index {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.history-label {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.history-label.latest {
+  background: rgba(74, 158, 255, 0.2);
+  color: #4a9eff;
+}
+
+.history-content {
+  padding: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.history-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.history-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.close-modal-btn {
+  padding: 8px 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.close-modal-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 </style>

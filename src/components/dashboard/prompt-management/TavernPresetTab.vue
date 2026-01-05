@@ -100,62 +100,27 @@
         <div class="macro-category">
           <h5>🏷️ 基础宏变量（在提示词内容中使用）</h5>
           <div class="macro-list">
-            <div class="macro-item">
-              <code>{{user}}</code>
-              <span>用户/角色名称（来自角色基础信息.名字）</span>
+            <div v-for="item in basicMacros" :key="item.code" class="macro-item">
+              <code>{{ item.code }}</code>
+              <span>{{ item.desc }}</span>
             </div>
-            <div class="macro-item">
-              <code>{{char}}</code>
-              <span>AI角色名（预设名称）</span>
-            </div>
-            <div class="macro-item">
-              <code>{{personaDescription}}</code>
-              <span>用户人设描述（设置面板 → AI服务配置中编辑）</span>
-            </div>
-            <div class="macro-item">
-              <code>{{scenario}}</code>
-              <span>场景设定（自动从游戏状态生成：位置、时间、物品等）</span>
-            </div>
-            <div class="macro-item">
-              <code>{{lastUserMessage}}</code>
-              <span>最后一条用户消息</span>
-            </div>
-            <div class="macro-item">
-              <code>{{lastCharMessage}}</code>
-              <span>最后一条AI消息</span>
+          </div>
+        </div>
+        <div class="macro-category">
+          <h5>🔧 正文优化专用宏变量（仅在正文优化条目中使用）</h5>
+          <div class="macro-list">
+            <div v-for="item in textOptMacros" :key="item.code" class="macro-item">
+              <code>{{ item.code }}</code>
+              <span>{{ item.desc }}</span>
             </div>
           </div>
         </div>
         <div class="macro-category">
           <h5>📍 占位符条目（系统自动填充内容）</h5>
           <div class="macro-list">
-            <div class="macro-item">
-              <code>personaDescription</code>
-              <span>用户人设 → 来自设置面板"Persona Description"</span>
-            </div>
-            <div class="macro-item">
-              <code>scenario</code>
-              <span>场景设定 → 自动从游戏状态生成</span>
-            </div>
-            <div class="macro-item">
-              <code>charDescription</code>
-              <span>角色描述 → 自动从角色基础信息生成</span>
-            </div>
-            <div class="macro-item">
-              <code>charPersonality</code>
-              <span>角色性格 → 自动从角色信息生成</span>
-            </div>
-            <div class="macro-item">
-              <code>chatHistory</code>
-              <span>聊天历史 → 记忆系统（短期+中期+长期）</span>
-            </div>
-            <div class="macro-item">
-              <code>worldInfoBefore</code>
-              <span>前置世界书 → 从世界书条目读取</span>
-            </div>
-            <div class="macro-item">
-              <code>worldInfoAfter</code>
-              <span>后置世界书 → 从世界书条目读取</span>
+            <div v-for="item in placeholderMacros" :key="item.code" class="macro-item">
+              <code>{{ item.code }}</code>
+              <span>{{ item.desc }}</span>
             </div>
           </div>
         </div>
@@ -532,7 +497,7 @@
           <div class="prompt-content-preview">
             <label>内容：</label>
             <div class="macro-hints">
-              可用宏：<code>{{user}}</code> <code>{{char}}</code> <code>{{personaDescription}}</code> <code>{{scenario}}</code>
+              可用宏：<code v-for="m in quickMacros" :key="m">{{ m }}</code>
             </div>
             <textarea
               v-model="newPromptData.content"
@@ -618,6 +583,35 @@ const promptFilter = ref<'all' | 'enabled' | 'disabled' | 'marker'>('all')
 
 // 宏帮助显示状态
 const showMacroHelp = ref(false)
+
+// 宏变量数据 - 避免在模板中直接写 {{}} 被 Vue 解析
+const basicMacros = [
+  { code: '{{user}}', desc: '用户/角色名称（来自角色基础信息.名字）' },
+  { code: '{{char}}', desc: 'AI角色名（预设名称）' },
+  { code: '{{personaDescription}}', desc: '用户人设描述（设置面板 → AI服务配置中编辑）' },
+  { code: '{{scenario}}', desc: '场景设定（自动从游戏状态生成：位置、时间、物品等）' },
+  { code: '{{lastUserMessage}}', desc: '最后一条用户消息' },
+  { code: '{{lastCharMessage}}', desc: '最后一条AI消息' },
+]
+
+const textOptMacros = [
+  { code: '{{playerInput}}', desc: '本次玩家输入的内容' },
+  { code: '{{sourceText}}', desc: '待优化正文（第一步AI生成的原始正文）' },
+  { code: '{{optimizedHistory}}', desc: '全部历史优化正文记录' },
+  { code: '{{optimizedHistory::N}}', desc: '最近N条历史优化正文（例如 {{optimizedHistory::3}} 表示最近3条）' },
+]
+
+const placeholderMacros = [
+  { code: 'personaDescription', desc: '用户人设 → 来自设置面板"Persona Description"' },
+  { code: 'scenario', desc: '场景设定 → 自动从游戏状态生成' },
+  { code: 'charDescription', desc: '角色描述 → 自动从角色基础信息生成' },
+  { code: 'charPersonality', desc: '角色性格 → 自动从角色信息生成' },
+  { code: 'chatHistory', desc: '聊天历史 → 记忆系统（短期+中期+长期）' },
+  { code: 'worldInfoBefore', desc: '前置世界书 → 从世界书条目读取' },
+  { code: 'worldInfoAfter', desc: '后置世界书 → 从世界书条目读取' },
+]
+
+const quickMacros = ['{{user}}', '{{char}}', '{{personaDescription}}', '{{scenario}}']
 
 // 模态框状态
 const viewingPreset = ref<LocalTavernPreset | null>(null)

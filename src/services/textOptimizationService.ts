@@ -14,6 +14,10 @@ import {
   generateEntryId,
   createDefaultEntry,
 } from '@/types/textOptimization';
+import { TavernMacroProcessor, createDefaultMacroContext } from '@/utils/tavernMacros';
+import type { MacroContext } from '@/types/tavernPreset';
+import { useGameStateStore } from '@/stores/gameStateStore';
+import { cloneDeep } from 'lodash';
 
 const STORAGE_KEY = 'text_optimization_preset';
 const ENABLED_KEY = 'text_optimization_enabled';
@@ -103,12 +107,12 @@ class TextOptimizationService {
   }
 
   /**
-   * 获取启用的条目（按depth排序）
+   * 获取启用的条目（按order排序，保持用户配置顺序）
    */
   getEnabledEntries(): TextOptimizationEntry[] {
     const entries = this.getEntries().filter(e => e.enabled);
-    // 按depth降序排序（depth越大越靠前）
-    entries.sort((a, b) => (b.depth || 0) - (a.depth || 0));
+    // 🔥 按order升序排序（保持用户配置的顺序，不再按depth排序）
+    entries.sort((a, b) => (a.order || 0) - (b.order || 0));
     return entries;
   }
 
@@ -273,27 +277,60 @@ class TextOptimizationService {
         return preset.entries.length;
       }
 
-      // 格式3: 纯条目数组
+      // 格式3: 数组格式
       if (Array.isArray(json)) {
-        const entries = json as TextOptimizationEntry[];
-        if (merge && this.currentPreset) {
-          this.currentPreset.entries.push(...entries);
-        } else {
+        // 格式3a: 预设数组（包含worldBooks的对象数组）
+        // 例如: [{ name: "预设名", worldBooks: [...] }]
+        if (json.length > 0 && json[0].worldBooks && Array.isArray(json[0].worldBooks)) {
+          const presetData = json[0]; // 取第一个预设
+          const entries = presetData.worldBooks.map((wb: any, index: number) => this.convertWorldBookToEntry(wb, index));
+
           if (!this.currentPreset) {
             this.currentPreset = {
               id: 'imported',
-              name: '导入的预设',
+              name: presetData.name || '导入的预设',
               entries,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
               version: '1.0.0',
             };
+          } else if (merge) {
+            this.currentPreset.entries.push(...entries);
+            this.currentPreset.name = presetData.name || this.currentPreset.name;
           } else {
             this.currentPreset.entries = entries;
+            this.currentPreset.name = presetData.name || this.currentPreset.name;
           }
+          this.save();
+          console.log('[正文优化服务] 导入worldBooks格式成功，条目数:', entries.length);
+          return entries.length;
         }
-        this.save();
-        return entries.length;
+
+        // 格式3b: 纯条目数组
+        const entries = json as TextOptimizationEntry[];
+        // 检查是否是有效的条目数组（至少有content或name字段）
+        const isValidEntries = entries.length > 0 && (entries[0].content !== undefined || entries[0].name !== undefined);
+
+        if (isValidEntries) {
+          if (merge && this.currentPreset) {
+            this.currentPreset.entries.push(...entries);
+          } else {
+            if (!this.currentPreset) {
+              this.currentPreset = {
+                id: 'imported',
+                name: '导入的预设',
+                entries,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                version: '1.0.0',
+              };
+            } else {
+              this.currentPreset.entries = entries;
+            }
+          }
+          this.save();
+          return entries.length;
+        }
       }
 
       throw new Error('无法识别的预设格式');
@@ -301,6 +338,23 @@ class TextOptimizationService {
       console.error('[正文优化服务] 导入失败:', e);
       throw e;
     }
+  }
+
+  /**
+   * 将worldBook格式转换为TextOptimizationEntry
+   */
+  private convertWorldBookToEntry(wb: any, index: number): TextOptimizationEntry {
+    return {
+      id: wb.id || generateEntryId(),
+      name: wb.name || `条目${index + 1}`,
+      content: wb.content || '',
+      role: wb.role || 'system',
+      enabled: wb.enabled !== false && wb.active !== false,
+      depth: typeof wb.depth === 'number' ? wb.depth : 4,
+      triggerMode: wb.triggerMode === 'green' || wb.triggerMode === 'keyword' ? 'keyword' : 'always',
+      keywords: Array.isArray(wb.keywords) ? wb.keywords : [],
+      order: index,
+    };
   }
 
   /**
@@ -540,52 +594,289 @@ class TextOptimizationService {
   }
 
   /**
+   * 检查关键词是否匹配
+   * @param keywords 关键词数组
+   * @param context 要检查的上下文文本
+   * @returns 是否有任何关键词匹配
+   */
+  matchKeywords(keywords: string[], context: string): boolean {
+    if (!keywords || keywords.length === 0) return false;
+    if (!context) return false;
+
+    const lowerContext = context.toLowerCase();
+    return keywords.some(keyword => {
+      if (!keyword || keyword.trim() === '') return false;
+      return lowerContext.includes(keyword.toLowerCase().trim());
+    });
+  }
+
+  /**
+   * 获取最新一层历史优化正文
+   * @param isReroll 是否为Re-roll场景（Re-roll时排除最新一层）
+   * @returns 最新一层历史优化正文，如果没有则返回空字符串
+   */
+  getLatestHistoryText(isReroll: boolean = false): string {
+    if (this.optimizedTextHistory.length === 0) {
+      return '';
+    }
+
+    if (isReroll && this.optimizedTextHistory.length > 0) {
+      // Re-roll时返回倒数第二层（排除最新层）
+      if (this.optimizedTextHistory.length >= 2) {
+        return this.optimizedTextHistory[this.optimizedTextHistory.length - 2];
+      }
+      return ''; // 只有一层时，Re-roll场景没有可用的历史
+    }
+
+    // 正常场景返回最新层
+    return this.optimizedTextHistory[this.optimizedTextHistory.length - 1];
+  }
+
+  /**
+   * 删除最新一层历史优化正文
+   * 用于Re-roll场景：在重新优化前先删除最新层
+   */
+  removeLatestHistoryText(): void {
+    if (this.optimizedTextHistory.length > 0) {
+      this.optimizedTextHistory.pop();
+      this.saveHistory();
+      console.log('[正文优化服务] 已删除最新一层历史优化正文，当前层数:', this.optimizedTextHistory.length);
+    }
+  }
+
+  /**
+   * 🔥 构建正文优化场景的宏上下文
+   * @param sourceText 待优化正文（第一步正文）
+   * @param playerInput 本次玩家输入
+   * @param isReroll 是否是重新优化（Re-roll时排除最新层历史）
+   * @returns MacroContext
+   */
+  buildOptimizationMacroContext(
+    sourceText: string,
+    playerInput: string,
+    isReroll: boolean = false
+  ): MacroContext {
+    // 获取全部历史优化正文（用于占位符替换）
+    const historyCount = this.getHistoryCount();
+    // Re-roll时排除最新层，首次优化不排除
+    const optimizedHistory = historyCount > 0
+      ? this.getOptimizedTextHistory(historyCount, isReroll)
+      : [];
+
+    // 🔥 获取游戏状态用于 {{scenario}} 占位符
+    const scenario = this.buildScenarioForMacro();
+
+    // 🔥 获取角色信息用于其他占位符
+    const characterInfo = this.getCharacterInfo();
+
+    return createDefaultMacroContext({
+      playerInput,
+      sourceText,
+      optimizedHistory,
+      lastUserMessage: playerInput,
+      scenario,
+      user: characterInfo.userName,
+      char: characterInfo.charName,
+      personaDescription: characterInfo.personaDescription,
+      charDescription: characterInfo.charDescription,
+      charPersonality: characterInfo.charPersonality,
+    });
+  }
+
+  /**
+   * 🔥 构建场景设定（用于 {{scenario}} 占位符）
+   * 返回完整的游戏状态 JSON（与 Step2 变量生成一致）
+   */
+  private buildScenarioForMacro(): string {
+    try {
+      const gameStateStore = useGameStateStore();
+      const saveData = gameStateStore.toSaveData();
+      if (!saveData) return '';
+
+      // 复制游戏状态，移除记忆和叙事历史（避免重复）
+      const stateForScenario = cloneDeep(saveData);
+      if (stateForScenario?.记忆) {
+        delete stateForScenario.记忆.短期记忆;
+        delete stateForScenario.记忆.隐式中期记忆;
+      }
+      if (stateForScenario?.叙事历史) {
+        delete stateForScenario.叙事历史;
+      }
+      // 移除优化正文历史（独立管理，不发送给 AI）
+      if (stateForScenario?.优化正文历史) {
+        delete stateForScenario.优化正文历史;
+      }
+
+      // 返回紧凑型 JSON
+      return JSON.stringify(stateForScenario);
+    } catch (error) {
+      console.error('[正文优化服务] buildScenarioForMacro 失败:', error);
+      return '';
+    }
+  }
+
+  /**
+   * 🔥 获取角色信息（用于各种占位符）
+   */
+  private getCharacterInfo(): {
+    userName: string;
+    charName: string;
+    personaDescription: string;
+    charDescription: string;
+    charPersonality: string;
+  } {
+    try {
+      const gameStateStore = useGameStateStore();
+      const saveData = gameStateStore.toSaveData();
+      // 使用 any 类型以支持动态属性访问
+      const characterInfo: any = saveData?.角色基础信息;
+      const playerStatus: any = saveData?.玩家角色状态;
+
+      // 用户名
+      const userName = characterInfo?.名字 || '修士';
+
+      // 角色名（AI）
+      const charName = 'AI';
+
+      // 用户人设描述 - 优先从 localStorage 读取
+      let personaDescription = '';
+      try {
+        const savedSettings = localStorage.getItem('dad_game_settings');
+        if (savedSettings) {
+          const settings = JSON.parse(savedSettings);
+          if (settings.personaDescription && settings.personaDescription.trim()) {
+            personaDescription = settings.personaDescription.trim();
+          }
+        }
+      } catch (e) {
+        // 忽略解析错误
+      }
+      if (!personaDescription && characterInfo) {
+        personaDescription = `你正在扮演一位名为"${userName}"的修仙者。`;
+      }
+
+      // 角色描述
+      let charDescription = '';
+      if (saveData) {
+        const parts: string[] = [];
+        if (characterInfo) {
+          parts.push(`# 角色基础信息`);
+          if (characterInfo.名字) parts.push(`名字: ${characterInfo.名字}`);
+          if (characterInfo.性别) parts.push(`性别: ${characterInfo.性别}`);
+          if (characterInfo.年龄) parts.push(`年龄: ${characterInfo.年龄}`);
+        }
+        if (playerStatus) {
+          parts.push(`\n# 当前状态`);
+          if (playerStatus.境界) {
+            const realm = playerStatus.境界;
+            if (typeof realm === 'object') {
+              parts.push(`境界: ${realm.名称 || ''}${realm.阶段 ? '-' + realm.阶段 : ''}`);
+            }
+          }
+        }
+        charDescription = parts.join('\n');
+      }
+
+      // 角色性格
+      let charPersonality = '';
+      if (characterInfo) {
+        const parts: string[] = [];
+        if (characterInfo.性格) parts.push(`性格: ${characterInfo.性格}`);
+        if (characterInfo.背景故事) parts.push(`背景: ${characterInfo.背景故事}`);
+        charPersonality = parts.join('\n');
+      }
+
+      return {
+        userName,
+        charName,
+        personaDescription,
+        charDescription,
+        charPersonality,
+      };
+    } catch (error) {
+      console.error('[正文优化服务] getCharacterInfo 失败:', error);
+      return {
+        userName: '修士',
+        charName: 'AI',
+        personaDescription: '',
+        charDescription: '',
+        charPersonality: '',
+      };
+    }
+  }
+
+  /**
    * 构建正文优化的提示词消息列表
+   * 🔥 重构：移除自动插入的历史正文和待优化正文，改用占位符处理
    * @param originalText 原始正文（Step1最新生成的）
-   * @param historyCount 要包含的历史优化正文层数（从配置获取）
+   * @param historyCount 要包含的历史优化正文层数（从配置获取）- 🔥 已废弃，现在通过占位符控制
    * @param isReroll 是否为Re-roll场景（Re-roll时需排除最新一层历史）
+   * @param userInput 用户输入（用于关键词匹配和占位符替换）
    * @returns 用于AI调用的消息列表
    */
   buildOptimizationMessages(
     originalText: string,
     historyCount: number = 0,
-    isReroll: boolean = false
+    isReroll: boolean = false,
+    userInput: string = ''
   ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
-    // 获取启用的条目（已按depth排序）
-    const entries = this.getEnabledEntries();
+    // 🔥 构建宏上下文（用于占位符替换）
+    const macroContext = this.buildOptimizationMacroContext(originalText, userInput, isReroll);
+    const macroProcessor = new TavernMacroProcessor();
 
-    // 添加条目内容
-    for (const entry of entries) {
+    // 获取启用的条目（已按order排序）
+    const allEntries = this.getEnabledEntries();
+
+    // 🔥 构建关键词匹配的上下文：待优化正文 + 用户输入 + 最新一层历史优化正文
+    const latestHistoryText = this.getLatestHistoryText(isReroll);
+    const keywordContext = [originalText, userInput, latestHistoryText]
+      .filter(text => text && text.trim())
+      .join('\n\n');
+
+    console.log('[正文优化服务] 关键词匹配上下文长度:', keywordContext.length,
+      '(原文:', originalText.length,
+      ', 用户输入:', userInput.length,
+      ', 历史:', latestHistoryText.length, ')');
+
+    // 🔥 根据触发模式过滤条目（保持原始顺序）
+    const filteredEntries = allEntries.filter(entry => {
+      if (entry.triggerMode === 'keyword') {
+        // 关键词触发模式：检查关键词是否匹配
+        const matched = this.matchKeywords(entry.keywords || [], keywordContext);
+        if (matched) {
+          console.log('[正文优化服务] ✅ 绿灯条目匹配:', entry.name || entry.id, '关键词:', entry.keywords);
+        }
+        return matched;
+      }
+      // always 模式或其他模式：始终激活
+      return true;
+    });
+
+    console.log('[正文优化服务] 条目过滤结果: 总计', allEntries.length, '条，激活', filteredEntries.length, '条');
+
+    // 🔥 添加过滤后的条目内容（应用占位符处理）
+    for (const entry of filteredEntries) {
+      // 🔥 使用TavernMacroProcessor处理占位符
+      const processedContent = macroProcessor.process(entry.content, macroContext);
+
+      // 跳过处理后为空的条目
+      if (!processedContent.trim()) {
+        console.log('[正文优化服务] 跳过空内容条目:', entry.name || entry.id);
+        continue;
+      }
+
       messages.push({
         role: entry.role,
-        content: entry.content,
+        content: processedContent,
       });
     }
 
-    // 新增：如果配置了历史层数，添加历史优化正文作为上下文
-    if (historyCount > 0) {
-      // Re-roll时排除最新一层（因为那是要被替换的）
-      const history = this.getOptimizedTextHistory(historyCount, isReroll);
-      if (history.length > 0) {
-        const historyContext = history.map((text, index) =>
-          `【历史优化正文 ${index + 1}】\n${text}`
-        ).join('\n\n---\n\n');
+    // 🔥 不再自动插入历史正文和待优化正文
+    // 用户需要在条目内容中使用 {{optimizedHistory}} 和 {{sourceText}} 占位符
 
-        messages.push({
-          role: 'system',
-          content: `以下是之前的优化正文历史，作为风格参考，请保持一致的写作风格：\n\n${historyContext}`,
-        });
-        console.log('[正文优化服务] 已添加', history.length, '层历史优化正文作为上下文');
-      }
-    }
-
-    // 添加原始正文作为用户输入
-    messages.push({
-      role: 'user',
-      content: `请优化以下正文内容：\n\n${originalText}`,
-    });
+    console.log('[正文优化服务] 构建消息完成，总计', messages.length, '条消息');
 
     return messages;
   }
@@ -593,3 +884,8 @@ class TextOptimizationService {
 
 // 导出单例
 export const textOptimizationService = new TextOptimizationService();
+
+// 🔥 开发调试：暴露到全局作用域
+if (typeof window !== 'undefined') {
+  (window as any).textOptimizationService = textOptimizationService;
+}

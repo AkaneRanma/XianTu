@@ -14,42 +14,73 @@
       </p>
     </div>
 
-    <!-- 记忆配置 -->
-    <div class="memory-section">
-      <div class="section-header">
-        <span class="section-title">记忆配置</span>
+    <!-- 占位符帮助区域 - 放在启用开关下方 -->
+    <div class="placeholder-help-section">
+      <div class="placeholder-help-header" @click="showPlaceholderHelp = !showPlaceholderHelp">
+        <span class="help-title">📚 可用宏变量与占位符</span>
+        <span class="help-toggle">{{ showPlaceholderHelp ? '▼' : '▶' }}</span>
       </div>
-      <div class="memory-config-grid">
-        <div class="config-row">
-          <label>正文优化</label>
-          <div class="config-input">
-            <input
-              type="number"
-              v-model.number="memoryCount"
-              min="0"
-              max="20"
-              @change="updateMemoryCount"
-              class="number-input"
-            />
-            <span class="input-hint">条</span>
+      <div v-if="showPlaceholderHelp" class="placeholder-help-content">
+        <div class="placeholder-category">
+          <div class="category-title">🔧 正文优化专用（核心占位符）</div>
+          <div class="placeholder-grid">
+            <div
+              v-for="item in optimizationPlaceholders"
+              :key="item.code"
+              class="placeholder-item"
+            >
+              <code>{{ item.code }}</code>
+              <span class="placeholder-desc">{{ item.desc }}</span>
+              <button class="insert-btn" @click="copyPlaceholder(item.code)">复制</button>
+            </div>
           </div>
         </div>
-        <div class="config-row">
-          <label>重新优化</label>
-          <div class="config-input">
-            <input
-              type="number"
-              v-model.number="rerollMemoryCount"
-              min="0"
-              max="20"
-              @change="updateMemoryCount"
-              class="number-input"
-            />
-            <span class="input-hint">条</span>
+        <div class="placeholder-category">
+          <div class="category-title">🏷️ 基础宏变量</div>
+          <div class="placeholder-grid">
+            <div
+              v-for="item in basicMacros"
+              :key="item.code"
+              class="placeholder-item"
+            >
+              <code>{{ item.code }}</code>
+              <span class="placeholder-desc">{{ item.desc }}</span>
+              <button class="insert-btn" @click="copyPlaceholder(item.code)">复制</button>
+            </div>
           </div>
         </div>
+        <div class="placeholder-category">
+          <div class="category-title">📅 时间相关</div>
+          <div class="placeholder-grid">
+            <div
+              v-for="item in timePlaceholders"
+              :key="item.code"
+              class="placeholder-item"
+            >
+              <code>{{ item.code }}</code>
+              <span class="placeholder-desc">{{ item.desc }}</span>
+              <button class="insert-btn" @click="copyPlaceholder(item.code)">复制</button>
+            </div>
+          </div>
+        </div>
+        <div class="placeholder-category">
+          <div class="category-title">📝 对话相关</div>
+          <div class="placeholder-grid">
+            <div
+              v-for="item in chatPlaceholders"
+              :key="item.code"
+              class="placeholder-item"
+            >
+              <code>{{ item.code }}</code>
+              <span class="placeholder-desc">{{ item.desc }}</span>
+              <button class="insert-btn" @click="copyPlaceholder(item.code)">复制</button>
+            </div>
+          </div>
+        </div>
+        <div class="macro-tip">
+          💡 <strong>提示：</strong>正文优化专用占位符仅在正文优化流程中有效。<code v-text="'{{sourceText}}'"></code>是待优化的原始正文，<code v-text="'{{playerInput}}'"></code>是本次玩家输入，<code v-text="'{{optimizedHistory::N}}'"></code>可获取最近N条历史优化正文。
+        </div>
       </div>
-      <p class="memory-hint">0表示不使用短期记忆</p>
     </div>
 
     <!-- 工具栏 -->
@@ -81,7 +112,7 @@
       <div v-if="entries.length === 0" class="empty-state">
         <div class="empty-icon">✨</div>
         <p>暂无优化条目</p>
-        <p class="empty-hint">添加条目来定义正文优化规则</p>
+        <p class="empty-hint">添加条目来定义正文优化规则，使用上方占位符来引用动态内容</p>
       </div>
 
       <div
@@ -140,10 +171,6 @@
               </select>
             </div>
             <div class="edit-row">
-              <label>深度</label>
-              <input type="number" v-model.number="entry.depth" min="0" max="10" @change="saveEntries" class="depth-input" />
-            </div>
-            <div class="edit-row">
               <label>触发模式</label>
               <select v-model="entry.triggerMode" @change="saveEntries" class="trigger-select">
                 <option value="always">🔵 始终触发</option>
@@ -179,7 +206,6 @@
         <div v-else class="entry-preview">
           <div class="preview-tags">
             <span class="tag role-tag" :class="entry.role">{{ getRoleLabel(entry.role) }}</span>
-            <span class="tag depth-tag">深度: {{ entry.depth || 0 }}</span>
             <span class="tag trigger-tag" :class="entry.triggerMode === 'keyword' ? 'green' : 'blue'">
               {{ entry.triggerMode === 'keyword' ? '🟢 关键词' : '🔵 始终' }}
             </span>
@@ -266,15 +292,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { textOptimizationService } from '@/services/textOptimizationService';
-import { promptPreviewService } from '@/services/promptPreviewService';
 import type { TextOptimizationEntry } from '@/types/textOptimization';
 import { toast } from '@/utils/toast';
 
 const enabled = ref(false);
 const showScrollTop = ref(false);
 const tabPanelRef = ref<HTMLElement | null>(null);
-const memoryCount = ref(0);
-const rerollMemoryCount = ref(0);
 const entries = ref<TextOptimizationEntry[]>([]);
 const editingId = ref<string | null>(null);
 const showImportDialog = ref(false);
@@ -282,6 +305,55 @@ const importMode = ref<'file' | 'paste'>('file');
 const importJson = ref('');
 const importMerge = ref(true);
 const fileInputEl = ref<HTMLInputElement | null>(null);
+const showPlaceholderHelp = ref(true); // 默认展开占位符帮助
+
+// 占位符数据定义
+const optimizationPlaceholders = [
+  { code: '{{playerInput}}', desc: '本次玩家输入的内容' },
+  { code: '{{sourceText}}', desc: '待优化正文（第一步AI生成的原始正文）' },
+  { code: '{{optimizedHistory}}', desc: '全部历史优化正文记录' },
+  { code: '{{optimizedHistory::3}}', desc: '最近N条历史优化正文（示例N=3）' },
+];
+
+const basicMacros = [
+  { code: '{{user}}', desc: '用户/角色名称（来自角色基础信息.名字）' },
+  { code: '{{char}}', desc: 'AI角色名（预设名称）' },
+  { code: '{{personaDescription}}', desc: '用户人设描述（设置面板 → AI服务配置中编辑）' },
+  { code: '{{scenario}}', desc: '场景设定（自动从游戏状态生成：位置、时间、物品等）' },
+  { code: '{{persona}}', desc: '用户人设（简短版本）' },
+  { code: '{{description}}', desc: '角色描述' },
+];
+
+const timePlaceholders = [
+  { code: '{{time}}', desc: '当前时间（HH:MM:SS格式）' },
+  { code: '{{date}}', desc: '当前日期（YYYY-MM-DD格式）' },
+  { code: '{{weekday}}', desc: '星期几（中文）' },
+];
+
+const chatPlaceholders = [
+  { code: '{{lastMessage}}', desc: '最后一条消息（任意角色）' },
+  { code: '{{lastUserMessage}}', desc: '最后一条用户消息' },
+  { code: '{{lastCharMessage}}', desc: '最后一条AI角色消息' },
+];
+
+// 复制占位符到剪贴板
+const copyPlaceholder = async (placeholder: string) => {
+  try {
+    await navigator.clipboard.writeText(placeholder);
+    toast.success(`已复制: ${placeholder}`);
+  } catch (error) {
+    // 回退方案：使用传统方法
+    const textarea = document.createElement('textarea');
+    textarea.value = placeholder;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    toast.success(`已复制: ${placeholder}`);
+  }
+};
 
 // 触发文件选择
 const triggerFileInput = () => {
@@ -292,9 +364,6 @@ const triggerFileInput = () => {
 const loadData = () => {
   enabled.value = textOptimizationService.isEnabled();
   entries.value = textOptimizationService.getEntries();
-  const config = promptPreviewService.getMemoryConfig();
-  memoryCount.value = config.textOptimizationCount;
-  rerollMemoryCount.value = config.textOptimizationRerollCount;
 };
 
 // 更新关键词
@@ -306,14 +375,6 @@ const updateKeywords = (entry: TextOptimizationEntry, event: Event) => {
 // 切换启用状态
 const toggleEnabled = () => {
   textOptimizationService.setEnabled(enabled.value);
-};
-
-// 更新记忆条数
-const updateMemoryCount = () => {
-  promptPreviewService.setMemoryConfig({
-    textOptimizationCount: memoryCount.value,
-    textOptimizationRerollCount: rerollMemoryCount.value
-  });
 };
 
 // 保存条目
@@ -368,12 +429,13 @@ const getRoleLabel = (role: string): string => {
 };
 
 // 截断内容
-const truncateContent = (content: string): string => {
+const truncateContent = (content: string | undefined): string => {
+  if (!content) return '(无内容)';
   const maxLength = 100;
   if (content.length > maxLength) {
     return content.substring(0, maxLength) + '...';
   }
-  return content || '(无内容)';
+  return content;
 };
 
 // 导出条目
@@ -467,7 +529,6 @@ onUnmounted(() => {
 .text-optimization-tab {
   display: flex;
   flex-direction: column;
-  height: 100%;
   gap: 16px;
 }
 
@@ -495,64 +556,6 @@ onUnmounted(() => {
   margin: 8px 0 0;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.5);
-}
-
-.memory-section {
-  padding: 12px;
-  background: rgba(30, 35, 45, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-}
-
-.section-header {
-  margin-bottom: 10px;
-}
-
-.section-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.config-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.config-row label {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
-  min-width: 140px;
-}
-
-.config-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.number-input {
-  width: 60px;
-  padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  color: #fff;
-  font-size: 13px;
-  text-align: center;
-}
-
-.number-input:focus {
-  outline: none;
-  border-color: rgba(74, 158, 255, 0.5);
-}
-
-.input-hint {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.4);
 }
 
 .toggle-switch {
@@ -911,11 +914,6 @@ onUnmounted(() => {
   color: #f59e0b;
 }
 
-.depth-tag {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.6);
-}
-
 .trigger-tag {
   font-size: 11px;
   padding: 2px 8px;
@@ -1127,16 +1125,144 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-/* 记忆配置网格 */
-.memory-config-grid {
-  display: flex;
-  gap: 24px;
+/* 占位符帮助区域 */
+.placeholder-help-section {
+  background: rgba(30, 35, 45, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
 }
 
-.memory-hint {
-  margin-top: 8px;
+.placeholder-help-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(139, 92, 246, 0.3));
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease;
+}
+
+.placeholder-help-header:hover {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.4), rgba(139, 92, 246, 0.4));
+}
+
+.help-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.help-toggle {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.placeholder-help-content {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: rgba(30, 35, 45, 0.95);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.placeholder-category {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.category-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.placeholder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.placeholder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.placeholder-item:hover {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.placeholder-item code {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.4);
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  color: #4a9eff;
+  background: rgba(74, 158, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.placeholder-desc {
+  flex: 1;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insert-btn {
+  padding: 4px 8px;
+  background: rgba(74, 158, 255, 0.15);
+  border: 1px solid rgba(74, 158, 255, 0.25);
+  border-radius: 4px;
+  color: #4a9eff;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.insert-btn:hover {
+  background: rgba(74, 158, 255, 0.25);
+  border-color: rgba(74, 158, 255, 0.4);
+}
+
+/* 宏提示区域 */
+.macro-tip {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.6;
+}
+
+.macro-tip strong {
+  color: #f59e0b;
+}
+
+.macro-tip code {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+  border-radius: 3px;
+  margin: 0 2px;
 }
 
 /* 编辑行组 */
